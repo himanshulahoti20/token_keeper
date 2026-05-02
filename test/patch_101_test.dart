@@ -126,7 +126,8 @@ void main() {
 
   group('Failure.toString', () {
     test('includes type and message', () {
-      const f = Failure<int>(message: 'token expired', type: FailureType.unauthorized);
+      const f = Failure<int>(
+          message: 'token expired', type: FailureType.unauthorized);
       expect(f.toString(), contains('unauthorized'));
       expect(f.toString(), contains('token expired'));
     });
