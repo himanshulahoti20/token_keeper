@@ -74,6 +74,12 @@ class TokenKeeper {
   /// Lifecycle events. Use this to drive logout flows or UI feedback.
   Stream<TokenEvent> get events => _eventsController.stream;
 
+  /// `true` while a refresh call is actively in flight.
+  ///
+  /// Synchronous read — useful for showing a loading indicator without
+  /// subscribing to [events].
+  bool get isRefreshing => _refreshCompleter != null;
+
   /// Returns the stored token without touching the network.
   ///
   /// Useful for UI bootstrapping (e.g. "are we logged in at all?"). Does NOT

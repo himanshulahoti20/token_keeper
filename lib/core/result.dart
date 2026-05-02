@@ -42,6 +42,16 @@ sealed class Result<T> extends Equatable {
         Failure<T>() => onFailure(this as Failure<T>),
       };
 
+  /// Returns the success value, or the result of [fallback] for a [Failure].
+  ///
+  /// ```dart
+  /// final token = result.getOrElse(() => Token(accessToken: 'anonymous'));
+  /// ```
+  T getOrElse(T Function() fallback) => switch (this) {
+        Success<T>(:final value) => value,
+        Failure<T>() => fallback(),
+      };
+
   /// Maps a successful value to another type, propagating any [Failure].
   Result<R> map<R>(R Function(T value) transform) => switch (this) {
         Success<T>(:final value) => Success<R>(transform(value)),
@@ -86,4 +96,10 @@ final class Failure<T> extends Result<T> {
 
   @override
   List<Object?> get props => [message, type, cause];
+
+  @override
+  String toString() {
+    final causeStr = cause != null ? ', cause: $cause' : '';
+    return 'Failure(${type.name}: $message$causeStr)';
+  }
 }

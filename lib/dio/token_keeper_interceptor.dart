@@ -34,6 +34,7 @@ class TokenKeeperInterceptor extends Interceptor {
     this.headerName = 'Authorization',
     this.scheme = 'Bearer',
     bool Function(Response<dynamic>? response)? shouldRefreshOn,
+    this.onRefreshFailed,
   }) : _shouldRefreshOn = shouldRefreshOn ?? _defaultShouldRefreshOn;
 
   /// Token source.
@@ -47,6 +48,23 @@ class TokenKeeperInterceptor extends Interceptor {
 
   /// Scheme prefix for the header. Defaults to `Bearer`.
   final String scheme;
+
+  /// Called when a refresh triggered by a `401` fails.
+  ///
+  /// Use this to navigate to the login screen directly from the interceptor
+  /// layer without subscribing to [TokenKeeper.events] separately:
+  ///
+  /// ```dart
+  /// TokenKeeperInterceptor(
+  ///   keeper: keeper,
+  ///   dio: dio,
+  ///   onRefreshFailed: (_) => router.go('/login'),
+  /// )
+  /// ```
+  ///
+  /// [TokenKeeper] still emits [RefreshFailedEvent] / [TokenClearedEvent]
+  /// on its event stream regardless of whether this callback is set.
+  final void Function(Failure<Token> failure)? onRefreshFailed;
 
   final bool Function(Response<dynamic>? response) _shouldRefreshOn;
 
@@ -84,6 +102,7 @@ class TokenKeeperInterceptor extends Interceptor {
 
     final refreshed = await keeper.forceRefresh();
     if (refreshed is! Success<Token>) {
+      onRefreshFailed?.call(refreshed as Failure<Token>);
       handler.next(err);
       return;
     }

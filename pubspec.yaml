@@ -3,7 +3,7 @@ description: >-
   Auth tokens, handled. Pure-Dart token manager with single-flight refresh,
   proactive expiry handling, Result-based APIs, event stream and a Dio
   interceptor for drop-in 401 retry.
-version: 1.0.0
+version: 1.0.1
 homepage: https://github.com/himanshulahoti/token_keeper
 repository: https://github.com/himanshulahoti/token_keeper
 issue_tracker: https://github.com/himanshulahoti/token_keeper/issues
