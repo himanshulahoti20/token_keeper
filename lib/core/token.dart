@@ -15,6 +15,9 @@ class Token extends Equatable {
   });
 
   /// Reconstructs a [Token] from its [toJson] form.
+  ///
+  /// Throws if [json] is missing required fields or has unexpected types.
+  /// Use [fromJsonOrNull] when the input is untrusted.
   factory Token.fromJson(Map<String, dynamic> json) {
     final rawScopes = json['scopes'];
     final scopes = rawScopes is List
@@ -28,6 +31,17 @@ class Token extends Equatable {
           rawExpires == null ? null : DateTime.parse(rawExpires as String),
       scopes: scopes,
     );
+  }
+
+  /// Like [fromJson] but returns `null` on any parse error instead of
+  /// throwing. Prefer this at storage boundaries where the persisted data
+  /// may be stale or corrupt.
+  static Token? fromJsonOrNull(Map<String, dynamic> json) {
+    try {
+      return Token.fromJson(json);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Bearer token used to authenticate requests.
@@ -53,6 +67,24 @@ class Token extends Equatable {
     return !n.isBefore(exp);
   }
 
+  /// Returns `true` when the token is NOT expired.
+  ///
+  /// Convenience inverse of [isExpired]. Tokens with no [expiresAt] are
+  /// always considered valid.
+  bool isValid([DateTime? now]) => !isExpired(now);
+
+  /// Returns the time remaining until [expiresAt].
+  ///
+  /// Returns `null` when [expiresAt] is not set (unknown lifetime).
+  /// Returns [Duration.zero] when the token is already expired rather than
+  /// a negative duration, so callers can safely use it as a countdown.
+  Duration? remainingLifetime([DateTime? now]) {
+    final exp = expiresAt;
+    if (exp == null) return null;
+    final remaining = exp.difference(now ?? DateTime.now());
+    return remaining.isNegative ? Duration.zero : remaining;
+  }
+
   /// Returns `true` if the token will expire within [duration] from `now`.
   bool willExpireWithin(Duration duration, [DateTime? now]) {
     final exp = expiresAt;
@@ -61,6 +93,21 @@ class Token extends Equatable {
     final threshold = n.add(duration);
     return !threshold.isBefore(exp);
   }
+
+  // ---- scope helpers --------------------------------------------------------
+
+  /// Returns `true` if [scope] is present in [scopes].
+  ///
+  /// Comparison is case-sensitive per RFC 6749 §3.3.
+  bool hasScope(String scope) => scopes.contains(scope);
+
+  /// Returns `true` if **all** of [required] are present in [scopes].
+  bool hasAllScopes(List<String> required) => required.every(scopes.contains);
+
+  /// Returns `true` if **at least one** of [any] is present in [scopes].
+  bool hasAnyScope(List<String> any) => any.any(scopes.contains);
+
+  // ---------------------------------------------------------------------------
 
   /// Returns a copy with the supplied fields replaced.
   ///

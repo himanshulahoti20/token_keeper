@@ -1,0 +1,4 @@
+# Allow the same heading text (e.g. "### Added", "### Improved") under
+# different parent sections — the standard Keep a Changelog structure.
+MD024:
+  siblings_only: true
