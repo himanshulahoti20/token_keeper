@@ -1,0 +1,11 @@
+name: token_keeper_example
+description: Example usage of token_keeper.
+publish_to: none
+
+environment:
+  sdk: ^3.3.0
+
+dependencies:
+  dio: ^5.4.0
+  token_keeper:
+    path: ../
