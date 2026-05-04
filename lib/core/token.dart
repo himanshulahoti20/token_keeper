@@ -146,6 +146,15 @@ class Token extends Equatable {
     return !threshold.isBefore(exp);
   }
 
+  /// Returns `true` if the token should be refreshed soon.
+  ///
+  /// By default, this checks if the token will expire within the next 5 minutes.
+  /// Useful for proactive refresh logic without having to manage your own
+  /// expiry buffer. Pass a custom [window] to override the default.
+  bool requiresRefresh(
+          {Duration window = const Duration(minutes: 5), DateTime? now}) =>
+      willExpireWithin(window, now);
+
   // ---- scope helpers --------------------------------------------------------
 
   /// Returns `true` if [scope] is present in [scopes].
@@ -158,6 +167,20 @@ class Token extends Equatable {
 
   /// Returns `true` if **at least one** of [any] is present in [scopes].
   bool hasAnyScope(List<String> any) => any.any(scopes.contains);
+
+  /// Returns `true` if the token is valid and has **all** of [required] scopes.
+  ///
+  /// Combines [isValid] and [hasAllScopes] for convenience at request
+  /// boundaries where both expiry and scope grants must be checked.
+  bool isValidWithAllScopes(List<String> required, [DateTime? now]) =>
+      isValid(now) && hasAllScopes(required);
+
+  /// Returns `true` if the token is valid and has **at least one** of [any] scopes.
+  ///
+  /// Combines [isValid] and [hasAnyScope] for convenience at request
+  /// boundaries where both expiry and scope grants must be checked.
+  bool isValidWithAnyScope(List<String> any, [DateTime? now]) =>
+      isValid(now) && hasAnyScope(any);
 
   // ---------------------------------------------------------------------------
 
