@@ -1,7 +1,6 @@
 import 'package:dio/dio.dart';
+import 'package:resilify/resilify.dart';
 
-import '../core/result.dart';
-import '../core/token.dart';
 import '../keeper/token_keeper.dart';
 
 /// Dio interceptor that authenticates requests with [TokenKeeper].
@@ -12,9 +11,10 @@ import '../keeper/token_keeper.dart';
 ///    [TokenKeeper.getValidToken] and sets the auth header. If no token is
 ///    available the request proceeds *without* the header so anonymous
 ///    endpoints still work.
-/// 2. On a `401`, runs a single-flight refresh via [TokenKeeper.forceRefresh]
-///    and retries the request exactly once. The retry is tagged on
-///    `RequestOptions.extra` so it can never recurse.
+/// 2. On a `401` (configurable via [shouldRefreshOn]), runs a single-flight
+///    refresh via [TokenKeeper.forceRefresh] and retries the request exactly
+///    once. The retry is tagged on `RequestOptions.extra` so it can never
+///    recurse.
 /// 3. If the refresh fails the original error is forwarded unchanged. The
 ///    [TokenKeeper] itself emits `TokenClearedEvent` for unauthorized refresh
 ///    failures, which your app should listen to in order to log the user out.
@@ -28,6 +28,8 @@ class TokenKeeperInterceptor extends Interceptor {
   ///   `Authorization: Bearer <token>`).
   /// * [shouldRefreshOn] lets you treat additional status codes (e.g. `419`)
   ///   as auth failures.
+  /// * [onRefreshFailed] is invoked when a 401-triggered refresh fails. Use
+  ///   it to navigate directly to login from the interceptor layer.
   TokenKeeperInterceptor({
     required this.keeper,
     required this.dio,
@@ -49,22 +51,20 @@ class TokenKeeperInterceptor extends Interceptor {
   /// Scheme prefix for the header. Defaults to `Bearer`.
   final String scheme;
 
-  /// Called when a refresh triggered by a `401` fails.
-  ///
-  /// Use this to navigate to the login screen directly from the interceptor
-  /// layer without subscribing to [TokenKeeper.events] separately:
+  /// Called when a refresh triggered by a `401` fails. Receives `resilify`'s
+  /// non-generic [Failure].
   ///
   /// ```dart
   /// TokenKeeperInterceptor(
   ///   keeper: keeper,
   ///   dio: dio,
   ///   onRefreshFailed: (_) => router.go('/login'),
-  /// )
+  /// );
   /// ```
   ///
   /// [TokenKeeper] still emits [RefreshFailedEvent] / [TokenClearedEvent]
-  /// on its event stream regardless of whether this callback is set.
-  final void Function(Failure<Token> failure)? onRefreshFailed;
+  /// regardless of whether this callback is set.
+  final void Function(Failure failure)? onRefreshFailed;
 
   final bool Function(Response<dynamic>? response) _shouldRefreshOn;
 
@@ -81,8 +81,9 @@ class TokenKeeperInterceptor extends Interceptor {
       return;
     }
     final result = await keeper.getValidToken();
-    if (result is Success<Token>) {
-      options.headers[headerName] = '$scheme ${result.value.accessToken}';
+    final token = result.dataOrNull;
+    if (token != null) {
+      options.headers[headerName] = '$scheme ${token.accessToken}';
     }
     handler.next(options);
   }
@@ -101,15 +102,16 @@ class TokenKeeperInterceptor extends Interceptor {
     }
 
     final refreshed = await keeper.forceRefresh();
-    if (refreshed is! Success<Token>) {
-      onRefreshFailed?.call(refreshed as Failure<Token>);
+    final refreshedToken = refreshed.dataOrNull;
+    if (refreshedToken == null) {
+      onRefreshFailed?.call(refreshed.errorOrNull!);
       handler.next(err);
       return;
     }
 
     final retryOptions = _cloneForRetry(
       err.requestOptions,
-      refreshed.value.accessToken,
+      refreshedToken.accessToken,
     );
 
     try {

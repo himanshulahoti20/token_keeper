@@ -26,18 +26,18 @@ void main() {
   });
 
   group('getValidToken', () {
-    test('returns Failure.unauthorized when storage is empty', () async {
+    test('returns Error(Failure.unauthorized) when storage is empty', () async {
       final keeper = TokenKeeper(
         storage: storage,
         refresher: (_) async =>
-            const Failure(message: 'nope', type: FailureType.unknown),
+            const Error(Failure.unknown(message: 'should not call')),
         clock: clock,
       );
       addTearDown(keeper.dispose);
 
       final result = await keeper.getValidToken();
-      expect(result, isA<Failure<Token>>());
-      expect((result as Failure<Token>).type, FailureType.unauthorized);
+      expect(result, isA<Error<Token>>());
+      expect((result as Error<Token>).failure.code, 401);
     });
 
     test('returns the cached token when not expired', () async {
@@ -46,15 +46,15 @@ void main() {
       ));
       final keeper = TokenKeeper(
         storage: storage,
-        refresher: (_) async => const Failure(
-            message: 'should not call', type: FailureType.unknown),
+        refresher: (_) async =>
+            const Error(Failure.unknown(message: 'should not call')),
         clock: clock,
       );
       addTearDown(keeper.dispose);
 
       final result = await keeper.getValidToken();
       expect(result, isA<Success<Token>>());
-      expect((result as Success<Token>).value.accessToken, 'a-1');
+      expect((result as Success<Token>).data.accessToken, 'a-1');
     });
 
     test('refreshes when token is expired', () async {
@@ -67,20 +67,17 @@ void main() {
         storage: storage,
         refresher: (current) async {
           calls++;
-          return Success(
-            current.copyWith(
-              accessToken: 'a-2',
-              expiresAt: now.add(const Duration(hours: 1)),
-            ),
-          );
+          return Success(current.copyWith(
+            accessToken: 'a-2',
+            expiresAt: now.add(const Duration(hours: 1)),
+          ));
         },
         clock: clock,
       );
       addTearDown(keeper.dispose);
 
       final result = await keeper.getValidToken();
-      expect(result, isA<Success<Token>>());
-      expect((result as Success<Token>).value.accessToken, 'a-2');
+      expect(result.dataOrNull?.accessToken, 'a-2');
       expect(calls, 1);
     });
 
@@ -105,7 +102,7 @@ void main() {
       addTearDown(keeper.dispose);
 
       final result = await keeper.getValidToken();
-      expect((result as Success<Token>).value.accessToken, 'a-fresh');
+      expect(result.dataOrNull?.accessToken, 'a-fresh');
       expect(calls, 1);
     });
   });
@@ -129,10 +126,7 @@ void main() {
       );
       addTearDown(keeper.dispose);
 
-      // Launch 100 concurrent getValidToken calls.
       final futures = List.generate(100, (_) => keeper.getValidToken());
-
-      // Give Dart a chance to schedule all of them.
       await Future<void>.delayed(Duration.zero);
       expect(calls, 1, reason: 'only one refresher invocation expected');
 
@@ -145,7 +139,7 @@ void main() {
       expect(results.length, 100);
       for (final r in results) {
         expect(r, isA<Success<Token>>());
-        expect((r as Success<Token>).value.accessToken, 'fresh');
+        expect((r as Success<Token>).data.accessToken, 'fresh');
       }
       expect(calls, 1);
     });
@@ -172,8 +166,8 @@ void main() {
       final r1 = await keeper.forceRefresh();
       final r2 = await keeper.forceRefresh();
       expect(calls, 2);
-      expect((r1 as Success<Token>).value.accessToken, 'fresh-1');
-      expect((r2 as Success<Token>).value.accessToken, 'fresh-2');
+      expect(r1.dataOrNull?.accessToken, 'fresh-1');
+      expect(r2.dataOrNull?.accessToken, 'fresh-2');
     });
   });
 
@@ -184,8 +178,7 @@ void main() {
       ));
       final keeper = TokenKeeper(
         storage: storage,
-        refresher: (_) async =>
-            const Failure(message: 'no', type: FailureType.unknown),
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
         clock: clock,
       );
       addTearDown(keeper.dispose);
@@ -193,7 +186,7 @@ void main() {
       final result = await keeper.withValidToken<String>(
         (t) async => Success<String>('hi-${t.accessToken}'),
       );
-      expect((result as Success<String>).value, 'hi-a-1');
+      expect(result.dataOrNull, 'hi-a-1');
     });
 
     test('refreshes and retries once on 401, then returns success', () async {
@@ -215,15 +208,12 @@ void main() {
       final result = await keeper.withValidToken<String>((t) async {
         calls++;
         if (calls == 1) {
-          return const Failure<String>(
-            message: '401',
-            type: FailureType.unauthorized,
-          );
+          return const Error<String>(Failure.unauthorized(message: '401'));
         }
         return Success<String>('ok-${t.accessToken}');
       });
       expect(calls, 2);
-      expect((result as Success<String>).value, 'ok-a-2');
+      expect(result.dataOrNull, 'ok-a-2');
     });
 
     test('retries at most ONCE — no infinite loop', () async {
@@ -243,24 +233,22 @@ void main() {
       var calls = 0;
       final result = await keeper.withValidToken<String>((_) async {
         calls++;
-        return const Failure<String>(
-          message: '401 again',
-          type: FailureType.unauthorized,
+        return const Error<String>(
+          Failure.unauthorized(message: '401 again'),
         );
       });
       expect(calls, 2, reason: 'one initial + one retry');
-      expect(result, isA<Failure<String>>());
-      expect((result as Failure<String>).type, FailureType.unauthorized);
+      expect(result, isA<Error<String>>());
+      expect((result as Error<String>).failure.code, 401);
     });
 
-    test('non-unauthorized failure is returned without retry', () async {
+    test('non-401 failure is returned without retry', () async {
       await storage.write(_expiringToken(
         expiresAt: now.add(const Duration(hours: 1)),
       ));
       final keeper = TokenKeeper(
         storage: storage,
-        refresher: (_) async =>
-            const Failure(message: 'no', type: FailureType.unknown),
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
         clock: clock,
       );
       addTearDown(keeper.dispose);
@@ -268,13 +256,12 @@ void main() {
       var calls = 0;
       final result = await keeper.withValidToken<String>((_) async {
         calls++;
-        return const Failure<String>(
-          message: 'server',
-          type: FailureType.unknown,
+        return const Error<String>(
+          Failure.serverError(message: '500'),
         );
       });
       expect(calls, 1);
-      expect(result, isA<Failure<String>>());
+      expect(result, isA<Error<String>>());
     });
   });
 
@@ -305,16 +292,15 @@ void main() {
     });
 
     test(
-        'refresh failing with unauthorized clears storage and emits both '
+        'refresh failing with 401 clears storage and emits both '
         'RefreshFailedEvent and TokenClearedEvent', () async {
       await storage.write(_expiringToken(
         expiresAt: now.subtract(const Duration(seconds: 1)),
       ));
       final keeper = TokenKeeper(
         storage: storage,
-        refresher: (_) async => const Failure(
-          message: 'refresh token revoked',
-          type: FailureType.unauthorized,
+        refresher: (_) async => const Error(
+          Failure.unauthorized(message: 'refresh token revoked'),
         ),
         clock: clock,
       );
@@ -327,13 +313,13 @@ void main() {
       final result = await keeper.getValidToken();
       await Future<void>.delayed(Duration.zero);
 
-      expect(result, isA<Failure<Token>>());
+      expect(result, isA<Error<Token>>());
       expect(await storage.read(), isNull);
       expect(events.whereType<RefreshFailedEvent>(), hasLength(1));
       expect(events.whereType<TokenClearedEvent>(), hasLength(1));
     });
 
-    test('non-auth refresh failure does NOT clear storage', () async {
+    test('non-401 refresh failure does NOT clear storage', () async {
       final t = _expiringToken(
         expiresAt: now.subtract(const Duration(seconds: 1)),
       );
@@ -341,7 +327,7 @@ void main() {
       final keeper = TokenKeeper(
         storage: storage,
         refresher: (_) async =>
-            const Failure(message: 'timeout', type: FailureType.network),
+            const Error(Failure.network(message: 'timeout')),
         clock: clock,
       );
       addTearDown(keeper.dispose);
@@ -362,8 +348,7 @@ void main() {
       await storage.write(_expiringToken());
       final keeper = TokenKeeper(
         storage: storage,
-        refresher: (_) async =>
-            const Failure(message: 'no', type: FailureType.unknown),
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
         clock: clock,
       );
       addTearDown(keeper.dispose);
@@ -380,8 +365,8 @@ void main() {
     });
   });
 
-  group('retry policy', () {
-    test('exponential policy retries on network failures only', () async {
+  group('retry config (resilify-backed)', () {
+    test('exponential config retries on transient (5xx) failures', () async {
       await storage.write(_expiringToken(
         expiresAt: now.subtract(const Duration(seconds: 1)),
       ));
@@ -392,10 +377,7 @@ void main() {
         refresher: (current) async {
           attempts++;
           if (attempts < 3) {
-            return const Failure(
-              message: 'down',
-              type: FailureType.network,
-            );
+            return const Error(Failure.serverError(message: 'down'));
           }
           return Success(current.copyWith(
             accessToken: 'a-final',
@@ -403,19 +385,20 @@ void main() {
           ));
         },
         clock: clock,
-        retryPolicy: RefreshRetryPolicy.exponential(
+        retryConfig: RefreshRetryConfig.exponential(
           maxAttempts: 3,
-          base: const Duration(milliseconds: 1),
+          delay: const Duration(milliseconds: 1),
+          jitter: 0,
         ),
       );
       addTearDown(keeper.dispose);
 
       final result = await keeper.forceRefresh();
       expect(attempts, 3);
-      expect((result as Success<Token>).value.accessToken, 'a-final');
+      expect(result.dataOrNull?.accessToken, 'a-final');
     });
 
-    test('default policy does NOT retry', () async {
+    test('default config does NOT retry', () async {
       await storage.write(_expiringToken(
         expiresAt: now.subtract(const Duration(seconds: 1)),
       ));
@@ -424,7 +407,7 @@ void main() {
         storage: storage,
         refresher: (_) async {
           attempts++;
-          return const Failure(message: 'oops', type: FailureType.network);
+          return const Error(Failure.serverError(message: 'oops'));
         },
         clock: clock,
       );
@@ -432,6 +415,30 @@ void main() {
 
       await keeper.forceRefresh();
       expect(attempts, 1);
+    });
+
+    test('does NOT retry on 401 (auth dead) even with maxAttempts > 1',
+        () async {
+      await storage.write(_expiringToken(
+        expiresAt: now.subtract(const Duration(seconds: 1)),
+      ));
+      var attempts = 0;
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async {
+          attempts++;
+          return const Error(Failure.unauthorized(message: 'revoked'));
+        },
+        clock: clock,
+        retryConfig: const RefreshRetryConfig(
+          maxAttempts: 5,
+          delay: Duration(milliseconds: 1),
+        ),
+      );
+      addTearDown(keeper.dispose);
+
+      await keeper.forceRefresh();
+      expect(attempts, 1, reason: '401 is not retryable');
     });
   });
 
@@ -443,8 +450,8 @@ void main() {
       await storage.write(expired);
       final keeper = TokenKeeper(
         storage: storage,
-        refresher: (_) async => const Failure(
-            message: 'should not be called', type: FailureType.unknown),
+        refresher: (_) async =>
+            const Error(Failure.unknown(message: 'should not be called')),
         clock: clock,
       );
       addTearDown(keeper.dispose);
@@ -455,8 +462,7 @@ void main() {
     test('setTokens writes and emits TokenRefreshedEvent', () async {
       final keeper = TokenKeeper(
         storage: storage,
-        refresher: (_) async =>
-            const Failure(message: 'no', type: FailureType.unknown),
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
         clock: clock,
       );
       addTearDown(keeper.dispose);
@@ -475,7 +481,8 @@ void main() {
   });
 
   group('refresher safety', () {
-    test('refresher that throws is converted to a Failure', () async {
+    test('refresher that throws is converted to Error(Failure.unknown)',
+        () async {
       await storage.write(_expiringToken(
         expiresAt: now.subtract(const Duration(seconds: 1)),
       ));
@@ -488,8 +495,46 @@ void main() {
       addTearDown(keeper.dispose);
 
       final result = await keeper.getValidToken();
-      expect(result, isA<Failure<Token>>());
-      expect((result as Failure<Token>).type, FailureType.unknown);
+      expect(result, isA<Error<Token>>());
+      expect((result as Error<Token>).failure.code, isNull);
+      expect(result.failure.message, contains('boom'));
+    });
+  });
+
+  group('isRefreshing', () {
+    test('false when no refresh in flight', () {
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+      expect(keeper.isRefreshing, isFalse);
+    });
+
+    test('true while refreshing, false after', () async {
+      await storage.write(_expiringToken(
+        expiresAt: now.subtract(const Duration(seconds: 1)),
+      ));
+
+      final gate = Completer<Result<Token>>();
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) => gate.future,
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final fut = keeper.getValidToken();
+      await Future<void>.delayed(Duration.zero);
+      expect(keeper.isRefreshing, isTrue);
+
+      gate.complete(Success(_expiringToken(
+        access: 'fresh',
+        expiresAt: now.add(const Duration(hours: 1)),
+      )));
+      await fut;
+      expect(keeper.isRefreshing, isFalse);
     });
   });
 }
