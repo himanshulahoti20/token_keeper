@@ -353,6 +353,12 @@ example/
   main.dart
 ```
 
+## ❤️ Support
+
+If you find this package helpful, consider supporting:
+
+👉 https://github.com/sponsors/himanshulahoti20
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
