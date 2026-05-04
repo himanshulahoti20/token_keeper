@@ -7,7 +7,6 @@ import 'package:test/test.dart';
 import 'package:token_keeper/dio.dart';
 import 'package:token_keeper/token_keeper.dart';
 
-/// A test adapter that lets each test queue scripted responses.
 class _ScriptedAdapter implements HttpClientAdapter {
   final List<ResponseBody Function(RequestOptions options)> _scripts = [];
   final List<RequestOptions> received = [];
@@ -65,8 +64,7 @@ void main() {
 
     final keeper = TokenKeeper(
       storage: storage,
-      refresher: (_) async =>
-          const Failure(message: 'no', type: FailureType.unknown),
+      refresher: (_) async => const Error(Failure.unknown(message: 'no')),
       clock: clock,
     );
     addTearDown(keeper.dispose);
@@ -77,7 +75,9 @@ void main() {
     final res = await dio.get<Map<String, dynamic>>('/me');
     expect(res.statusCode, 200);
     expect(
-        adapter.received.single.headers['Authorization'], 'Bearer live-token');
+      adapter.received.single.headers['Authorization'],
+      'Bearer live-token',
+    );
   });
 
   test('on 401 it refreshes and retries the request once', () async {
@@ -140,8 +140,7 @@ void main() {
     expect(adapter.received.length, 2);
   });
 
-  test('refresh failure with unauthorized propagates 401 and clears storage',
-      () async {
+  test('refresh failure with 401 propagates and clears storage', () async {
     await storage.write(Token(
       accessToken: 'old',
       expiresAt: clock.now().add(const Duration(hours: 1)),
@@ -149,9 +148,8 @@ void main() {
 
     final keeper = TokenKeeper(
       storage: storage,
-      refresher: (_) async => const Failure(
-        message: 'revoked',
-        type: FailureType.unauthorized,
+      refresher: (_) async => const Error(
+        Failure.unauthorized(message: 'revoked'),
       ),
       clock: clock,
     );
@@ -187,8 +185,7 @@ void main() {
 
     final keeper = TokenKeeper(
       storage: storage,
-      refresher: (_) async =>
-          const Failure(message: 'no', type: FailureType.unknown),
+      refresher: (_) async => const Error(Failure.unknown(message: 'no')),
       clock: clock,
     );
     addTearDown(keeper.dispose);
@@ -202,6 +199,40 @@ void main() {
     );
     expect(res.statusCode, 200);
     expect(
-        adapter.received.single.headers.containsKey('Authorization'), isFalse);
+      adapter.received.single.headers.containsKey('Authorization'),
+      isFalse,
+    );
+  });
+
+  test('onRefreshFailed callback receives the Failure', () async {
+    await storage.write(Token(
+      accessToken: 'old',
+      expiresAt: clock.now().add(const Duration(hours: 1)),
+    ));
+
+    final keeper = TokenKeeper(
+      storage: storage,
+      refresher: (_) async => const Error(
+        Failure.unauthorized(message: 'gone'),
+      ),
+      clock: clock,
+    );
+    addTearDown(keeper.dispose);
+
+    Failure? caught;
+    dio.interceptors.add(TokenKeeperInterceptor(
+      keeper: keeper,
+      dio: dio,
+      onRefreshFailed: (f) => caught = f,
+    ));
+    adapter.enqueue((_) => _json({}, 401));
+
+    try {
+      await dio.get<dynamic>('/me');
+    } on DioException catch (_) {/* expected */}
+
+    expect(caught, isNotNull);
+    expect(caught!.code, 401);
+    expect(caught!.message, 'gone');
   });
 }

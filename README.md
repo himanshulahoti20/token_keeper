@@ -1,11 +1,12 @@
 # token_keeper
 
-> Auth tokens, handled.
+> Auth tokens, handled — now powered by [`resilify`](https://pub.dev/packages/resilify).
 
 A pure-Dart token manager that gives you **single-flight refresh**,
-**proactive expiry**, **clean `Result<T>` APIs**, **lifecycle events**, and a
-drop-in **Dio interceptor** — without locking you into a transport, storage
-backend, or auth scheme.
+**proactive expiry**, **clean `Result<T>` APIs** (via `resilify`),
+**reactive token streams**, **JWT parsing**, a **caching storage decorator**,
+a **background refresh timer**, and a drop-in **Dio interceptor** — without
+locking you into a transport, storage backend, or auth scheme.
 
 No exceptions cross the public surface. No global state. No Flutter
 dependency in the core. No surprise duplicate refresh calls when 50 requests
@@ -19,30 +20,42 @@ the refresh, log out on permanent failure. Most implementations get
 concurrency wrong (two refreshes for the same response burst) or leak
 exceptions through `try/catch` mazes.
 
-`token_keeper` is the small, well-tested core that gets it right.
+`token_keeper` is the small, well-tested core that gets it right — and as of
+**1.1.0** it shares its `Result` / `Failure` model with `resilify`, so token
+errors slot into the same vocabulary as the rest of your API stack.
 
 ## Features
 
 - **Single-flight refresh** — exactly one in-flight refresh per keeper, even
-  under 50+ concurrent callers. Uses a `Completer` and a synchronous gate.
+  under 50+ concurrent callers.
 - **Proactive refresh** — refresh `N` seconds before expiry, not after.
-- **`Result<T>` everywhere** — `Success` or typed `Failure(unauthorized | network | unknown)`. Public methods never throw.
+- **`Result<T>` everywhere (resilify)** — `Success<T>(data)` or
+  `Error<T>(Failure.unauthorized() | Failure.network() | …)`. Public methods
+  never throw.
+- **Backoff + jitter on refresh** — via `resilify`'s `RetryHelper.retry`
+  under the hood. Built-in `RefreshRetryConfig.exponential`.
 - **`withValidToken`** — wrap any operation; auto-refresh + one bounded
-  retry on `unauthorized`. No infinite loops.
+  retry on `401`. No infinite loops.
+- **Reactive `tokenStream`** — `Stream<Token?>` of token changes.
 - **Lifecycle events** — `TokenRefreshedEvent`, `TokenClearedEvent`,
   `RefreshFailedEvent` on a broadcast `Stream`.
+- **`Token.tryParseJwt`** — pure-Dart JWT parser, auto-fills `expiresAt` and
+  scopes from claims; returns `null` on bad input.
+- **`CachingTokenStorage`** — in-memory cache decorator on top of any
+  backend (e.g. `flutter_secure_storage`).
+- **`TokenRefreshTimer`** — periodic background refresh for long-lived
+  services.
 - **Dio interceptor** — attaches `Authorization`, retries once on `401`.
-- **Pluggable storage** — implement `TokenStorage` for Keychain, secure
-  storage, SQLite, an isolate, anything.
-- **Pluggable retry policy** — built-in `RefreshRetryPolicy.exponential`.
-- **Pluggable clock** — `FixedClock` for deterministic tests.
-- **Pluggable logger** — observability hook with no logging dependency.
+- **Pluggable clock & logger** — `FixedClock` for tests, `TokenKeeperLogger`
+  hook with zero logging dependency.
 
 ## Install
 
 ```yaml
 dependencies:
-  token_keeper: ^1.0.0
+  token_keeper: ^1.1.0
+  # Pulled in transitively, but list it if you import resilify directly.
+  # resilify: ^1.0.3
 ```
 
 If you want the Dio integration, also depend on `dio: ^5`.
@@ -55,21 +68,29 @@ import 'package:token_keeper/dio.dart';
 import 'package:dio/dio.dart';
 
 final keeper = TokenKeeper(
-  storage: InMemoryTokenStorage(),       // or your secure adapter
+  // Caching layer keeps reads off disk on the hot path.
+  storage: CachingTokenStorage(InMemoryTokenStorage()),
   refresher: (current) async {
-    // Hit your /auth/refresh and return Success(newToken) or Failure(...).
-    final res = await refreshDio.post('/auth/refresh',
-        data: {'refresh': current.refreshToken});
-    if (res.statusCode == 401) {
-      return const Failure(message: 'revoked', type: FailureType.unauthorized);
+    // Hit your /auth/refresh and return Success(newToken) or
+    // Error(Failure.x(...)).
+    try {
+      final res = await refreshDio.post('/auth/refresh',
+          data: {'refresh': current.refreshToken});
+      if (res.statusCode == 401) {
+        return const Error(Failure.unauthorized(message: 'revoked'));
+      }
+      return Success(Token(
+        accessToken: res.data['access_token'] as String,
+        refreshToken: res.data['refresh_token'] as String?,
+        expiresAt: DateTime.now()
+            .add(Duration(seconds: res.data['expires_in'])),
+      ));
+    } catch (e) {
+      return Error(Failure.network(cause: e));
     }
-    return Success(Token(
-      accessToken: res.data['access_token'] as String,
-      refreshToken: res.data['refresh_token'] as String?,
-      expiresAt: DateTime.now().add(Duration(seconds: res.data['expires_in'])),
-    ));
   },
   proactiveWindow: const Duration(seconds: 30),
+  retryConfig: RefreshRetryConfig.exponential(maxAttempts: 3),
 );
 
 // Wire Dio.

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:equatable/equatable.dart';
 
 /// An immutable OAuth-style token pair.
@@ -39,6 +41,56 @@ class Token extends Equatable {
   static Token? fromJsonOrNull(Map<String, dynamic> json) {
     try {
       return Token.fromJson(json);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Parses a JWT [jwt] and returns a [Token] seeded with the `exp` and
+  /// `scope` / `scopes` / `scp` claims found in the payload.
+  ///
+  /// The raw JWT string is stored as [accessToken] verbatim so it can be
+  /// attached to requests as-is. [refreshToken] is `null` unless supplied
+  /// explicitly; pass it for refresh-token flows.
+  ///
+  /// Returns `null` if [jwt] is not a valid JWT (wrong segment count,
+  /// undecodable payload, etc.). Never throws.
+  ///
+  /// **Note:** this only parses the payload; it does NOT verify the
+  /// signature. Treat the returned [Token] as authoritative only after the
+  /// server has accepted it on a subsequent request.
+  static Token? tryParseJwt(String jwt, {String? refreshToken}) {
+    try {
+      final parts = jwt.split('.');
+      if (parts.length != 3) return null;
+
+      final payloadJson = utf8.decode(
+        base64Url.decode(base64Url.normalize(parts[1])),
+      );
+      final claims = jsonDecode(payloadJson);
+      if (claims is! Map<String, dynamic>) return null;
+
+      DateTime? expiresAt;
+      final exp = claims['exp'];
+      if (exp is int) {
+        expiresAt =
+            DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+      }
+
+      List<String> scopes = const [];
+      final scopeClaim = claims['scope'] ?? claims['scp'] ?? claims['scopes'];
+      if (scopeClaim is String && scopeClaim.isNotEmpty) {
+        scopes = scopeClaim.split(' ').where((s) => s.isNotEmpty).toList();
+      } else if (scopeClaim is List) {
+        scopes = List<String>.unmodifiable(scopeClaim.cast<String>());
+      }
+
+      return Token(
+        accessToken: jwt,
+        refreshToken: refreshToken,
+        expiresAt: expiresAt,
+        scopes: scopes,
+      );
     } catch (_) {
       return null;
     }

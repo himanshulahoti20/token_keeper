@@ -7,5 +7,6 @@ environment:
 
 dependencies:
   dio: ^5.4.0
+  resilify: ^1.0.3
   token_keeper:
     path: ../

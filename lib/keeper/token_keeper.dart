@@ -1,34 +1,33 @@
 import 'dart:async';
 
+import 'package:resilify/resilify.dart';
+
 import '../core/clock.dart';
 import '../core/events.dart';
 import '../core/logger.dart';
-import '../core/result.dart';
 import '../core/retry_policy.dart';
 import '../core/token.dart';
 import '../storage/token_storage.dart';
 
 /// A function that exchanges the [current] token for a fresh one.
 ///
-/// Implementations MUST NOT throw — return a [Failure] instead. Use
-/// [FailureType.unauthorized] to indicate that the refresh token is no longer
-/// valid (which causes [TokenKeeper] to clear storage and emit
-/// [TokenClearedEvent]); use [FailureType.network] for transient errors that
-/// the [RefreshRetryPolicy] may retry.
+/// Implementations MUST NOT throw — return `Error(Failure.unauthorized(...))`
+/// or `Error(Failure.network(...))` instead. Use [Failure.unauthorized] (or
+/// any 401-coded failure) to indicate that the refresh token is no longer
+/// valid: this triggers [TokenKeeper] to clear storage and emit a
+/// [TokenClearedEvent]. Other failures are surfaced via [RefreshFailedEvent]
+/// without clearing storage so the caller can retry later.
 typedef TokenRefresher = Future<Result<Token>> Function(Token current);
 
 /// Coordinates access-token retrieval, proactive refresh, single-flight
-/// refresh, and authenticated operation retry.
+/// refresh, and authenticated operation retry — built on top of
+/// [`resilify`](https://pub.dev/packages/resilify) so failure handling is
+/// unified with the rest of your networking stack.
 ///
-/// `TokenKeeper` is the single source of truth for "do I have a valid token
-/// right now?". It guarantees that:
-///
+/// Guarantees:
 /// * exactly one refresh runs at a time, even under 50+ concurrent calls,
 /// * no method on the public surface throws,
-/// * lifecycle events are observable through [events].
-///
-/// Construct one per authenticated session and dispose with [dispose] when
-/// you tear the session down.
+/// * lifecycle events are observable through [events] and [tokenStream].
 class TokenKeeper {
   /// Creates a keeper.
   ///
@@ -37,31 +36,34 @@ class TokenKeeper {
   /// * [proactiveWindow] — refresh ahead of expiry by this much time. Set to
   ///   [Duration.zero] (default) to refresh only after expiry.
   /// * [clock] — injectable for tests.
-  /// * [retryPolicy] — controls retries inside a single refresh attempt.
+  /// * [retryConfig] — controls retries inside a single refresh attempt.
   /// * [logger] — observability hook.
   TokenKeeper({
     required TokenStorage storage,
     required TokenRefresher refresher,
     Duration proactiveWindow = Duration.zero,
     Clock clock = const Clock(),
-    RefreshRetryPolicy retryPolicy = const RefreshRetryPolicy(),
+    RefreshRetryConfig retryConfig = const RefreshRetryConfig(),
     TokenKeeperLogger logger = noopLogger,
   })  : _storage = storage,
         _refresher = refresher,
         _proactiveWindow = proactiveWindow,
         _clock = clock,
-        _retryPolicy = retryPolicy,
+        _retry = retryConfig,
         _log = logger;
 
   final TokenStorage _storage;
   final TokenRefresher _refresher;
   final Duration _proactiveWindow;
   final Clock _clock;
-  final RefreshRetryPolicy _retryPolicy;
+  final RefreshRetryConfig _retry;
   final TokenKeeperLogger _log;
 
   final StreamController<TokenEvent> _eventsController =
       StreamController<TokenEvent>.broadcast();
+
+  final StreamController<Token?> _tokenStreamController =
+      StreamController<Token?>.broadcast();
 
   /// In-flight refresh, or `null` when no refresh is running.
   ///
@@ -73,6 +75,20 @@ class TokenKeeper {
 
   /// Lifecycle events. Use this to drive logout flows or UI feedback.
   Stream<TokenEvent> get events => _eventsController.stream;
+
+  /// Reactive stream of token changes.
+  ///
+  /// Emits the new [Token] after a successful refresh or [setTokens] call.
+  /// Emits `null` after [clear] or an unauthorized refresh failure.
+  ///
+  /// Does not replay the current value to late subscribers — combine with
+  /// [peek] to seed your state management layer:
+  ///
+  /// ```dart
+  /// final initial = await keeper.peek();
+  /// keeper.tokenStream.listen(...);
+  /// ```
+  Stream<Token?> get tokenStream => _tokenStreamController.stream;
 
   /// `true` while a refresh call is actively in flight.
   ///
@@ -105,15 +121,14 @@ class TokenKeeper {
 
   /// Returns a token that is currently valid, refreshing if needed.
   ///
-  /// Returns [Failure] with [FailureType.unauthorized] if there is no token
-  /// at all, or if the refresh fails because the refresh token was rejected.
+  /// Returns `Error(Failure.unauthorized(...))` if there is no token at all,
+  /// or if the refresh failed because the refresh token was rejected.
   Future<Result<Token>> getValidToken() async {
     _checkNotDisposed();
     final current = await _storage.read();
     if (current == null) {
-      return const Failure<Token>(
-        message: 'No token in storage',
-        type: FailureType.unauthorized,
+      return const Error<Token>(
+        Failure.unauthorized(message: 'No token in storage'),
       );
     }
     if (!_needsRefresh(current)) return Success<Token>(current);
@@ -128,16 +143,16 @@ class TokenKeeper {
     _checkNotDisposed();
     final current = await _storage.read();
     if (current == null) {
-      return const Failure<Token>(
-        message: 'No token to refresh',
-        type: FailureType.unauthorized,
+      return const Error<Token>(
+        Failure.unauthorized(message: 'No token to refresh'),
       );
     }
     return _runRefresh(current);
   }
 
   /// Runs [operation] with a valid token, retrying once if the operation
-  /// returns [FailureType.unauthorized] (e.g. a 401 from the server).
+  /// returns a 401-coded failure (`Failure.unauthorized` or any
+  /// `failure.code == 401`).
   ///
   /// The retry is bounded to a single additional attempt to avoid loops; if
   /// the second call also fails, that failure is returned to the caller.
@@ -146,25 +161,28 @@ class TokenKeeper {
   ) async {
     _checkNotDisposed();
     final initial = await getValidToken();
-    if (initial is Failure<Token>) return initial.cast<R>();
-    final firstToken = (initial as Success<Token>).value;
+    if (initial is Error<Token>) return Error<R>(initial.failure);
+    final firstToken = (initial as Success<Token>).data;
 
     final firstAttempt = await operation(firstToken);
-    if (firstAttempt is! Failure<R>) return firstAttempt;
-    if (firstAttempt.type != FailureType.unauthorized) return firstAttempt;
+    if (firstAttempt is! Error<R>) return firstAttempt;
+    if (firstAttempt.failure.code != 401) return firstAttempt;
 
     _log(LogLevel.debug, 'operation returned 401; refreshing and retrying');
 
     final refreshed = await forceRefresh();
-    if (refreshed is Failure<Token>) return refreshed.cast<R>();
-    return operation((refreshed as Success<Token>).value);
+    if (refreshed is Error<Token>) return Error<R>(refreshed.failure);
+    return operation((refreshed as Success<Token>).data);
   }
 
-  /// Closes the events stream and releases internal state.
+  /// Closes event streams and releases internal state.
+  ///
+  /// After disposal, no further calls to public methods should be made.
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
     await _eventsController.close();
+    await _tokenStreamController.close();
   }
 
   // ---- internals ----------------------------------------------------------
@@ -176,7 +194,7 @@ class TokenKeeper {
     return token.willExpireWithin(_proactiveWindow, now);
   }
 
-  /// Single-flight gate around [_doRefresh].
+  /// Single-flight gate around the actual refresh work.
   ///
   /// Invariant: setting `_refreshCompleter = null` happens *before*
   /// `completer.complete(...)`. Because Dart resumes awaiters on microtasks
@@ -192,8 +210,6 @@ class TokenKeeper {
     final completer = Completer<Result<Token>>();
     _refreshCompleter = completer;
 
-    // Kick off the actual work without awaiting it here — we want to return
-    // `completer.future` synchronously so the next caller can join.
     unawaited(_executeFlight(current, completer));
     return completer.future;
   }
@@ -202,33 +218,16 @@ class TokenKeeper {
     Token current,
     Completer<Result<Token>> completer,
   ) async {
-    Result<Token> result;
-    try {
-      result = await _doRefreshWithRetries(current);
-    } catch (error, stackTrace) {
-      // Defensive: refreshers should not throw, but if one does we surface
-      // it as a Failure rather than letting it escape into awaiter futures.
-      _log(
-        LogLevel.error,
-        'refresher threw',
-        error: error,
-        stackTrace: stackTrace,
-      );
-      result = Failure<Token>(
-        message: 'Refresher threw: $error',
-        type: FailureType.unknown,
-        cause: error,
-      );
-    }
+    final result = await _runWithRetry(current);
 
-    // Side-effects BEFORE completing the completer so that observers and
-    // awaiters always see a consistent storage state.
+    // Side-effects BEFORE completing the completer so observers and awaiters
+    // see a consistent storage state.
     if (result is Success<Token>) {
-      await _storage.write(result.value);
-      _emit(TokenRefreshedEvent(result.value));
-    } else if (result is Failure<Token>) {
-      _emit(RefreshFailedEvent(result));
-      if (result.type == FailureType.unauthorized) {
+      await _storage.write(result.data);
+      _emit(TokenRefreshedEvent(result.data));
+    } else if (result is Error<Token>) {
+      _emit(RefreshFailedEvent(result.failure));
+      if (result.failure.code == 401) {
         await _storage.delete();
         _emit(const TokenClearedEvent());
       }
@@ -239,42 +238,73 @@ class TokenKeeper {
     completer.complete(result);
   }
 
-  Future<Result<Token>> _doRefreshWithRetries(Token current) async {
-    var attempt = 0;
-    Failure<Token>? lastFailure;
-    while (attempt < _retryPolicy.maxAttempts) {
-      attempt++;
-      _log(LogLevel.debug, 'refresh attempt $attempt');
-      final result = await _refresher(current);
-      if (result is Success<Token>) {
-        _log(LogLevel.info, 'refresh succeeded on attempt $attempt');
-        return result;
-      }
-      lastFailure = result as Failure<Token>;
-      _log(
+  /// Wraps the [_refresher] in `resilify`'s [RetryHelper.retry] so the
+  /// existing back-off / jitter / attemptTimeout machinery is reused.
+  Future<Result<Token>> _runWithRetry(Token current) {
+    return RetryHelper.retry<Token>(
+      () => Result.tryRunAsync<Token>(
+        () async {
+          final r = await _refresher(current);
+          // Bridge a returned Error<Token> to a thrown failure so RetryHelper
+          // sees it; tryRunAsync re-wraps the catch into Error<Token>.
+          if (r is Error<Token>) throw _RefresherError(r.failure);
+          return (r as Success<Token>).data;
+        },
+        onError: (e, st) {
+          if (e is _RefresherError) {
+            return e.failure.copyWith(stackTrace: st);
+          }
+          return Failure.unknown(
+            message: 'Refresher threw: $e',
+            cause: e,
+            stackTrace: st,
+          );
+        },
+      ),
+      maxAttempts: _retry.maxAttempts,
+      delay: _retry.delay,
+      maxDelay: _retry.maxDelay,
+      backoffFactor: _retry.backoffFactor,
+      jitter: _retry.jitter,
+      random: _retry.random,
+      attemptTimeout: _retry.attemptTimeout,
+      retryIf: _retry.retryIf ?? RefreshRetryConfig.defaultRetryIf,
+      onRetry: (attempt, failure) => _log(
         LogLevel.warning,
-        'refresh attempt $attempt failed: ${lastFailure.message} '
-        '(${lastFailure.type.name})',
-        error: lastFailure.cause,
-      );
-      if (attempt >= _retryPolicy.maxAttempts) break;
-      if (!_retryPolicy.shouldRetry(lastFailure)) break;
-      final delay = _retryPolicy.delayFor(attempt);
-      if (delay > Duration.zero) await Future<void>.delayed(delay);
-    }
-    return lastFailure ??
-        const Failure<Token>(
-          message: 'Refresh failed with no result',
-          type: FailureType.unknown,
-        );
+        'refresh attempt $attempt failed: ${failure.message} '
+        '(code: ${failure.code})',
+        error: failure.cause,
+      ),
+    );
   }
 
   void _emit(TokenEvent event) {
-    if (_eventsController.isClosed) return;
-    _eventsController.add(event);
+    if (!_eventsController.isClosed) {
+      _eventsController.add(event);
+    }
+    if (!_tokenStreamController.isClosed) {
+      switch (event) {
+        case TokenRefreshedEvent(:final token):
+          _tokenStreamController.add(token);
+        case TokenClearedEvent():
+          _tokenStreamController.add(null);
+        case RefreshFailedEvent():
+          break;
+      }
+    }
   }
 
   void _checkNotDisposed() {
     assert(!_disposed, 'TokenKeeper has been disposed');
   }
+}
+
+/// Internal wrapper used to smuggle a [Failure] returned by the refresher
+/// through [Result.tryRunAsync] without losing fidelity.
+class _RefresherError implements Exception {
+  _RefresherError(this.failure);
+  final Failure failure;
+
+  @override
+  String toString() => 'RefresherError($failure)';
 }

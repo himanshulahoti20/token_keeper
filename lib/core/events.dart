@@ -1,6 +1,6 @@
 import 'package:equatable/equatable.dart';
+import 'package:resilify/resilify.dart';
 
-import 'result.dart';
 import 'token.dart';
 
 /// Events emitted by `TokenKeeper.events`.
@@ -36,12 +36,14 @@ final class TokenClearedEvent extends TokenEvent {
 }
 
 /// Emitted when a refresh attempt fails. [failure] explains why.
+///
+/// Note: [failure] is `resilify`'s non-generic [Failure] value type.
 final class RefreshFailedEvent extends TokenEvent {
   /// Creates a refresh-failure event.
   const RefreshFailedEvent(this.failure);
 
   /// The failure that ended the refresh attempt.
-  final Failure<Token> failure;
+  final Failure failure;
 
   @override
   List<Object?> get props => [failure];
