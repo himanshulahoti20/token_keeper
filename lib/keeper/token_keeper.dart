@@ -135,6 +135,14 @@ class TokenKeeper {
     return _runRefresh(current);
   }
 
+  /// Alias for [getValidToken] with a name that reads more naturally at call
+  /// sites that don't immediately consume the returned token (e.g. background
+  /// warmups or pre-flight checks).
+  ///
+  /// Behaviour is identical: returns the current token if still valid,
+  /// otherwise runs a single-flight refresh.
+  Future<Result<Token>> refreshIfNeeded() => getValidToken();
+
   /// Forces a refresh, regardless of expiry.
   ///
   /// If a refresh is already in flight, the existing one is reused — this

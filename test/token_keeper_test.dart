@@ -537,4 +537,46 @@ void main() {
       expect(keeper.isRefreshing, isFalse);
     });
   });
+
+  group('refreshIfNeeded (1.1.2)', () {
+    test('returns the current token when still valid', () async {
+      await storage.write(_expiringToken(
+        expiresAt: now.add(const Duration(minutes: 10)),
+      ));
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async =>
+            const Error(Failure.unknown(message: 'should not call')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final result = await keeper.refreshIfNeeded();
+      expect(result, isA<Success<Token>>());
+      expect((result as Success<Token>).data.accessToken, 'a-1');
+    });
+
+    test('triggers a refresh when the token is expired', () async {
+      await storage.write(_expiringToken(
+        expiresAt: now.subtract(const Duration(seconds: 1)),
+      ));
+      var refreshCalls = 0;
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async {
+          refreshCalls++;
+          return Success(_expiringToken(
+            access: 'fresh',
+            expiresAt: now.add(const Duration(hours: 1)),
+          ));
+        },
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final result = await keeper.refreshIfNeeded();
+      expect(refreshCalls, 1);
+      expect((result as Success<Token>).data.accessToken, 'fresh');
+    });
+  });
 }

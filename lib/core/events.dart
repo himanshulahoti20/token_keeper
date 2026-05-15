@@ -23,6 +23,11 @@ final class TokenRefreshedEvent extends TokenEvent {
 
   @override
   List<Object?> get props => [token];
+
+  @override
+  String toString() =>
+      'TokenRefreshedEvent(access=${token.maskedAccessToken}, '
+      'expiresAt=${token.expiresAt})';
 }
 
 /// Emitted whenever stored credentials are wiped — either by an explicit
@@ -33,6 +38,9 @@ final class TokenClearedEvent extends TokenEvent {
 
   @override
   List<Object?> get props => const [];
+
+  @override
+  String toString() => 'TokenClearedEvent()';
 }
 
 /// Emitted when a refresh attempt fails. [failure] explains why.
@@ -47,4 +55,7 @@ final class RefreshFailedEvent extends TokenEvent {
 
   @override
   List<Object?> get props => [failure];
+
+  @override
+  String toString() => 'RefreshFailedEvent($failure)';
 }

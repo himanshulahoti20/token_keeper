@@ -31,6 +31,23 @@ class CachingTokenStorage implements TokenStorage {
   /// store. Returns `null` if the cache has not been populated yet.
   Token? get cachedToken => _loaded ? _cache : null;
 
+  /// Whether the cache has been populated from the backing store.
+  ///
+  /// Use this to distinguish "no token stored" from "we haven't checked yet"
+  /// in places where you can't `await` a [read].
+  bool get isCached => _loaded;
+
+  /// Eagerly populates the cache from the backing store.
+  ///
+  /// Call this once during app startup so the first [read] on the request
+  /// hot path doesn't pay for backing-store I/O. Subsequent calls are
+  /// no-ops unless the cache has been [invalidate]d.
+  Future<void> warmup() async {
+    if (_loaded) return;
+    _cache = await _backing.read();
+    _loaded = true;
+  }
+
   @override
   Future<Token?> read() async {
     if (!_loaded) {

@@ -137,6 +137,14 @@ class Token extends Equatable {
     return remaining.isNegative ? Duration.zero : remaining;
   }
 
+  /// Returns the number of whole seconds until [expiresAt], mirroring the
+  /// OAuth 2.0 `expires_in` field used in token responses.
+  ///
+  /// Returns `null` when [expiresAt] is not set. Returns `0` (never negative)
+  /// when the token is already expired so callers can re-serialize a token
+  /// without producing an invalid `expires_in`.
+  int? expiresInSeconds([DateTime? now]) => remainingLifetime(now)?.inSeconds;
+
   /// Returns `true` if the token will expire within [duration] from `now`.
   bool willExpireWithin(Duration duration, [DateTime? now]) {
     final exp = expiresAt;
@@ -154,6 +162,20 @@ class Token extends Equatable {
   bool requiresRefresh(
           {Duration window = const Duration(minutes: 5), DateTime? now}) =>
       willExpireWithin(window, now);
+
+  /// Returns a partially-redacted form of [accessToken] suitable for logs.
+  ///
+  /// Shows the first 4 and last 4 characters joined by `…` (e.g.
+  /// `eyJh…sR2c`). Tokens with 8 characters or fewer are fully redacted as
+  /// `***` so short opaque tokens don't leak verbatim.
+  ///
+  /// Never log the raw [accessToken] in production — use this getter or
+  /// [toString] (which already redacts) instead.
+  String get maskedAccessToken {
+    if (accessToken.length <= 8) return '***';
+    return '${accessToken.substring(0, 4)}…'
+        '${accessToken.substring(accessToken.length - 4)}';
+  }
 
   // ---- scope helpers --------------------------------------------------------
 
