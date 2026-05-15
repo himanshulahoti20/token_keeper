@@ -87,5 +87,41 @@ void main() {
       final cache = CachingTokenStorage(InMemoryTokenStorage());
       expect(cache.cachedToken, isNull);
     });
+
+    test('isCached reflects load state', () async {
+      final cache = CachingTokenStorage(
+        InMemoryTokenStorage(initial: const Token(accessToken: 'a')),
+      );
+      expect(cache.isCached, isFalse);
+      await cache.read();
+      expect(cache.isCached, isTrue);
+      cache.invalidate();
+      expect(cache.isCached, isFalse);
+    });
+
+    test('warmup populates the cache without a read call', () async {
+      final cache = CachingTokenStorage(
+        InMemoryTokenStorage(initial: const Token(accessToken: 'a')),
+      );
+      expect(cache.cachedToken, isNull);
+      await cache.warmup();
+      expect(cache.isCached, isTrue);
+      expect(cache.cachedToken, const Token(accessToken: 'a'));
+    });
+
+    test('warmup is idempotent', () async {
+      var hits = 0;
+      final backing = _CountingStorage(
+        onRead: () {
+          hits++;
+          return const Token(accessToken: 'a');
+        },
+      );
+      final cache = CachingTokenStorage(backing);
+      await cache.warmup();
+      await cache.warmup();
+      await cache.warmup();
+      expect(hits, 1);
+    });
   });
 }

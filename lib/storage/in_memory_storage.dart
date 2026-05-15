@@ -11,6 +11,18 @@ class InMemoryTokenStorage implements TokenStorage {
 
   Token? _token;
 
+  /// Synchronous peek at the currently-stored token.
+  ///
+  /// Tests often need to assert against the persisted state without awaiting;
+  /// production code should prefer [read].
+  Token? get snapshot => _token;
+
+  /// Returns a new [InMemoryTokenStorage] seeded with the same token.
+  ///
+  /// Useful in tests when you need a separate, decoupled storage instance
+  /// that shares the starting state but evolves independently.
+  InMemoryTokenStorage clone() => InMemoryTokenStorage(initial: _token);
+
   @override
   Future<Token?> read() async => _token;
 

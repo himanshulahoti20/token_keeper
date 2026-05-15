@@ -4,6 +4,41 @@ All notable changes to this package will be documented in this file. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] — 2026-05-15
+
+### Added
+
+- **`Token.maskedAccessToken`** — partially-redacted access-token string
+  (`abcd…wxyz`) safe to drop into logs and crash reports. Tokens of 8
+  characters or fewer are fully redacted as `***`.
+- **`Token.expiresInSeconds([DateTime? now])`** — convenience getter that
+  mirrors the OAuth 2.0 `expires_in` field. Returns the whole-second count
+  until expiry (`0` for already-expired, `null` when expiry is unknown), so
+  re-serializing a token to a refresh-response body is one call.
+- **`CachingTokenStorage.warmup()`** — eagerly populates the cache from the
+  backing store. Call once during app startup so the first `read()` on the
+  request hot path skips disk I/O.
+- **`CachingTokenStorage.isCached`** — synchronous bool getter that
+  distinguishes "no token stored" from "we haven't checked yet" without an
+  `await`.
+- **`InMemoryTokenStorage.snapshot`** — synchronous peek at the persisted
+  token; intended for test assertions that don't want to `await read()`.
+- **`InMemoryTokenStorage.clone()`** — returns a new instance seeded with the
+  current token; useful in tests when you need a decoupled copy that evolves
+  independently.
+- **`TokenKeeper.refreshIfNeeded()`** — alias of [`getValidToken`] that reads
+  more naturally at call sites that don't immediately consume the token (e.g.
+  background warmups, pre-flight checks). Identical behaviour and identical
+  single-flight semantics.
+
+### Improved
+
+- **Event `toString()`** — `TokenRefreshedEvent`, `TokenClearedEvent`, and
+  `RefreshFailedEvent` now produce single-line, redacted debug strings
+  instead of falling back to the default `Equatable` form. Logs and test
+  failure output are immediately readable; the access token is shown via
+  `Token.maskedAccessToken` so secrets stay out of log files.
+
 ## [1.1.1] — 2026-05-04
 
 ### Added

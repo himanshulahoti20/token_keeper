@@ -23,5 +23,29 @@ void main() {
       await s.delete();
       expect(await s.read(), isNull);
     });
+
+    test('snapshot reflects current token synchronously', () async {
+      final s = InMemoryTokenStorage();
+      expect(s.snapshot, isNull);
+      await s.write(const Token(accessToken: 'a'));
+      expect(s.snapshot, const Token(accessToken: 'a'));
+      await s.delete();
+      expect(s.snapshot, isNull);
+    });
+
+    test('clone returns an independent copy seeded with current token',
+        () async {
+      final original = InMemoryTokenStorage(
+        initial: const Token(accessToken: 'a'),
+      );
+      final copy = original.clone();
+
+      expect(copy.snapshot, const Token(accessToken: 'a'));
+
+      await copy.write(const Token(accessToken: 'b'));
+      expect(copy.snapshot, const Token(accessToken: 'b'));
+      expect(original.snapshot, const Token(accessToken: 'a'),
+          reason: 'clone must not share state with the original');
+    });
   });
 }

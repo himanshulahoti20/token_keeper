@@ -1,5 +1,11 @@
 # token_keeper
 
+[![pub version](https://img.shields.io/pub/v/token_keeper.svg)](https://pub.dev/packages/token_keeper)
+[![pub points](https://img.shields.io/pub/points/token_keeper)](https://pub.dev/packages/token_keeper/score)
+[![pub likes](https://img.shields.io/pub/likes/token_keeper)](https://pub.dev/packages/token_keeper/score)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![CI](https://github.com/himanshulahoti20/token_keeper/actions/workflows/dart_ci.yml/badge.svg?branch=main&cache_bust=1)
+
 > Auth tokens, handled — now powered by [`resilify`](https://pub.dev/packages/resilify).
 
 A pure-Dart token manager that gives you **single-flight refresh**,
@@ -53,9 +59,9 @@ errors slot into the same vocabulary as the rest of your API stack.
 
 ```yaml
 dependencies:
-  token_keeper: ^1.1.0
+  token_keeper: ^1.1.2
   # Pulled in transitively, but list it if you import resilify directly.
-  # resilify: ^1.0.3
+  # resilify: ^1.0.6
 ```
 
 If you want the Dio integration, also depend on `dio: ^5`.
@@ -121,26 +127,66 @@ final me = await api.get('/me');
 | `scopes` | `List<String>` | granted scopes |
 
 ```dart
-token.isExpired();                            // ignores null expiry
+// Lifecycle
+token.isExpired();                                  // ignores null expiry
+token.isValid();                                    // inverse of isExpired
 token.willExpireWithin(const Duration(seconds: 30));
+token.requiresRefresh();                            // default 5-min window
+token.remainingLifetime();                          // Duration?
+token.expiresInSeconds();                           // OAuth-style int?
+
+// Scope checks
+token.hasScope('read:profile');
+token.hasAllScopes(['read:profile', 'write:profile']);
+token.hasAnyScope(['admin', 'owner']);
+token.isValidWithAllScopes(['read:profile']);       // expiry + scopes
+token.isValidWithAnyScope(['admin', 'owner']);      // expiry + scopes
+
+// Construction / serialization
 token.copyWith(accessToken: 'x', clearRefreshToken: true);
 Token.fromJson(token.toJson());
+Token.fromJsonOrNull(maybeCorruptJson);             // null on bad input
+Token.tryParseJwt(jwt, refreshToken: rt);           // null on bad input
+
+// Logging-safe representation
+print(token.maskedAccessToken);                     // "eyJh…sR2c"
 ```
 
-### `Result<T>`
+### `Result<T>` and `Failure` (re-exported from `resilify`)
 
 ```dart
 sealed class Result<T> { ... }
-final class Success<T> extends Result<T> { final T value; }
-final class Failure<T> extends Result<T> {
-  final String message;
-  final FailureType type; // unauthorized | network | unknown
+final class Success<T> extends Result<T> { final T data; }
+final class Error<T>   extends Result<T> { final Failure failure; }
+
+class Failure {
+  final int?    code;          // HTTP status or domain-specific code
+  final String  message;
   final Object? cause;
+  final StackTrace? stackTrace;
+
+  // Named constructors:
+  const Failure.unauthorized({String message = '...', ...});
+  const Failure.network({...});
+  const Failure.timeout({...});
+  const Failure.serverError({...});
+  const Failure.rateLimit({...});
+  // ...
+
+  bool get is4xx;
+  bool get is5xx;
+  bool get isRetryable;        // 5xx + 408 + 429
 }
 ```
 
-Helpers: `result.fold(onSuccess:, onFailure:)`, `result.map(...)`,
-`failure.cast<R>()`, `result.valueOrNull`.
+Helpers: `result.fold(onSuccess, onError)` (positional),
+`result.when(success: , error: )`, `result.dataOrNull`,
+`result.errorOrNull`, `result.getOrElse(() => fallback)`,
+`result.map(transform)`.
+
+> **`dart:core.Error` collision** — `resilify`'s `Error<T>` variant
+> shadows `dart:core.Error`. If you need both in the same file, hide one:
+> `import 'dart:core' hide Error;`
 
 ### `TokenKeeper`
 
@@ -150,17 +196,20 @@ TokenKeeper({
   required TokenRefresher refresher,
   Duration proactiveWindow = Duration.zero,
   Clock clock = const Clock(),
-  RefreshRetryPolicy retryPolicy = const RefreshRetryPolicy(),
+  RefreshRetryConfig retryConfig = const RefreshRetryConfig(),
   TokenKeeperLogger logger = noopLogger,
 });
 
 Future<Result<Token>> getValidToken();
+Future<Result<Token>> refreshIfNeeded();   // alias of getValidToken
 Future<Result<R>>     withValidToken<R>(Future<Result<R>> Function(Token) op);
 Future<Result<Token>> forceRefresh();
 Future<void>          setTokens(Token token);
 Future<void>          clear();
 Future<Token?>        peek();
+bool                  get isRefreshing;    // sync — true while refresh in flight
 Stream<TokenEvent>    get events;
+Stream<Token?>        get tokenStream;     // reactive token changes
 Future<void>          dispose();
 ```
 
@@ -182,7 +231,22 @@ abstract interface class TokenStorage {
 }
 ```
 
-Built-in: `InMemoryTokenStorage({Token? initial})`.
+Built-in: `InMemoryTokenStorage({Token? initial})` — also exposes
+`snapshot` (sync getter) and `clone()` for tests.
+
+#### `CachingTokenStorage`
+
+Wrap any backend with an in-memory cache so the request hot path skips disk
+I/O:
+
+```dart
+final storage = CachingTokenStorage(SecureStorageAdapter());
+
+await storage.warmup();        // optional: prime the cache at app startup
+storage.isCached;              // sync bool — has the cache loaded yet?
+storage.cachedToken;           // sync read of the last-loaded token
+storage.invalidate();          // drop the cache, e.g. after cross-isolate write
+```
 
 #### Implementing a secure storage adapter
 
@@ -219,19 +283,31 @@ class SecureStorageAdapter implements TokenStorage {
 ```dart
 sealed class TokenEvent { }
 final class TokenRefreshedEvent extends TokenEvent { final Token token; }
-final class TokenClearedEvent  extends TokenEvent { }
-final class RefreshFailedEvent extends TokenEvent { final Failure<Token> failure; }
+final class TokenClearedEvent   extends TokenEvent { }
+final class RefreshFailedEvent  extends TokenEvent { final Failure failure; }
 ```
+
+All three implement `Equatable` and have redacted `toString()` overrides so
+they're directly usable in tests, log lines, and reactive state layers.
 
 A typical logout listener:
 
 ```dart
 keeper.events.listen((event) {
   switch (event) {
-    case TokenClearedEvent(): router.go('/login');
+    case TokenClearedEvent():   router.go('/login');
     case TokenRefreshedEvent(): /* analytics ping */;
     case RefreshFailedEvent(:final failure): logger.warn(failure.message);
   }
+});
+```
+
+For reactive UI, prefer `tokenStream`:
+
+```dart
+keeper.tokenStream.listen((token) {
+  // null after clear() or unauthorized refresh failure;
+  // new Token after refresh / setTokens.
 });
 ```
 
@@ -252,18 +328,19 @@ To bypass the interceptor for a single request (e.g. login or refresh), set
 `Options(extra: {'token_keeper_skip_auth': true})` or call
 `requestOptions.skipTokenKeeper()`.
 
-### Retry policy
+### Retry config
 
-The default policy makes a single attempt. Use the exponential factory for
-backoff on network failures:
+The default config makes a single attempt. Use the exponential factory for
+backoff on transient failures (5xx / 408 / 429 by default — 401 is never
+retried because the auth grant is dead):
 
 ```dart
 TokenKeeper(
   // ...
-  retryPolicy: RefreshRetryPolicy.exponential(
+  retryConfig: RefreshRetryConfig.exponential(
     maxAttempts: 4,
-    base: const Duration(milliseconds: 250),
-    max: const Duration(seconds: 5),
+    delay: const Duration(milliseconds: 250),
+    maxDelay: const Duration(seconds: 5),
   ),
 );
 ```
@@ -271,12 +348,16 @@ TokenKeeper(
 Or roll your own predicate:
 
 ```dart
-RefreshRetryPolicy(
+RefreshRetryConfig(
   maxAttempts: 5,
-  delayFor: (attempt) => Duration(milliseconds: 100 * attempt),
-  shouldRetry: (failure) => failure.type != FailureType.unauthorized,
+  delay: const Duration(milliseconds: 100),
+  retryIf: (failure) => failure.code != 401,
 );
 ```
+
+`RefreshRetryConfig` is a thin wrapper around `resilify`'s `RetryHelper`, so
+it shares the same exponential / jitter / `attemptTimeout` machinery as the
+rest of the resilify ecosystem.
 
 ### Logging
 
@@ -331,14 +412,16 @@ lib/
     clock.dart
     events.dart
     logger.dart
-    result.dart
-    retry_policy.dart
+    result.dart               # re-exports resilify Result/Failure
+    retry_policy.dart         # RefreshRetryConfig
     token.dart
   storage/
     token_storage.dart
     in_memory_storage.dart
+    caching_storage.dart      # in-memory cache decorator
   keeper/
     token_keeper.dart
+    token_refresh_timer.dart  # periodic background refresh
   dio/
     token_keeper_interceptor.dart
 
@@ -355,9 +438,9 @@ example/
 
 ## ❤️ Support
 
-If you find this package helpful, consider supporting:
+If you find this package helpful, consider [sponsoring on GitHub][sponsor].
 
-👉 https://github.com/sponsors/himanshulahoti20
+[sponsor]: https://github.com/sponsors/himanshulahoti20
 
 ## License
 
