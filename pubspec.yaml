@@ -8,6 +8,8 @@ homepage: https://github.com/himanshulahoti20/token_keeper
 repository: https://github.com/himanshulahoti20/token_keeper
 issue_tracker: https://github.com/himanshulahoti20/token_keeper/issues
 documentation: https://pub.dev/documentation/token_keeper/latest/
+funding:
+  - https://github.com/sponsors/himanshulahoti20
 
 topics:
   - auth
