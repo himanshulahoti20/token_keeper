@@ -177,8 +177,8 @@ void main() {
     );
 
     test('isValidWithAllScopes true when fresh and all scopes granted', () {
-      expect(freshToken.isValidWithAllScopes(['read', 'write'], fixedNow),
-          isTrue);
+      expect(
+          freshToken.isValidWithAllScopes(['read', 'write'], fixedNow), isTrue);
     });
 
     test('isValidWithAllScopes false when expired even if scopes granted', () {
@@ -190,8 +190,8 @@ void main() {
     });
 
     test('isValidWithAnyScope true when at least one scope granted', () {
-      expect(freshToken.isValidWithAnyScope(['admin', 'read'], fixedNow),
-          isTrue);
+      expect(
+          freshToken.isValidWithAnyScope(['admin', 'read'], fixedNow), isTrue);
     });
   });
 

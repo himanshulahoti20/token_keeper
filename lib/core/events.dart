@@ -25,8 +25,7 @@ final class TokenRefreshedEvent extends TokenEvent {
   List<Object?> get props => [token];
 
   @override
-  String toString() =>
-      'TokenRefreshedEvent(access=${token.maskedAccessToken}, '
+  String toString() => 'TokenRefreshedEvent(access=${token.maskedAccessToken}, '
       'expiresAt=${token.expiresAt})';
 }
 
