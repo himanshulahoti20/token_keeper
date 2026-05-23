@@ -123,5 +123,38 @@ void main() {
       await cache.warmup();
       expect(hits, 1);
     });
+
+    test('refresh reloads from backing and returns fresh token', () async {
+      var readCount = 0;
+      final backing = _CountingStorage(
+        onRead: () {
+          readCount++;
+          return Token(accessToken: 'v$readCount');
+        },
+      );
+      final cache = CachingTokenStorage(backing);
+
+      final first = await cache.read();
+      expect(first!.accessToken, 'v1');
+      expect(readCount, 1);
+
+      final second = await cache.refresh();
+      expect(second!.accessToken, 'v2');
+      expect(readCount, 2);
+    });
+
+    test('refresh updates isCached and cachedToken', () async {
+      final backing = InMemoryTokenStorage(
+        initial: const Token(accessToken: 'a'),
+      );
+      final cache = CachingTokenStorage(backing);
+
+      cache.invalidate();
+      expect(cache.isCached, isFalse);
+
+      await cache.refresh();
+      expect(cache.isCached, isTrue);
+      expect(cache.cachedToken, const Token(accessToken: 'a'));
+    });
   });
 }

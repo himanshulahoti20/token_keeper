@@ -4,6 +4,69 @@ All notable changes to this package will be documented in this file. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-05-23
+
+### Added
+
+- **`Token.metadata`** — an optional `Map<String, dynamic>` field for
+  arbitrary extra data alongside the token pair. Typical uses: tenant IDs,
+  user IDs, feature flags, or any non-standard fields returned in the token
+  response. Defaults to `const {}` so existing call sites are unaffected.
+  Round-trips through `toJson` / `fromJson` (the `metadata` key is omitted
+  from the JSON output when the map is empty). Included in `==` / `hashCode`
+  via `Equatable`, and accepted by `copyWith`.
+
+- **`Token.tryParseJwt` — auto-populates `metadata` from non-standard
+  claims.** All JWT payload claims that are not part of the RFC 7519 standard
+  set (`exp`, `iat`, `nbf`, `iss`, `sub`, `aud`, `jti`) or the scope claims
+  (`scope`, `scp`, `scopes`) are collected into `Token.metadata`. This means
+  custom claims like `tenant_id`, `role`, `org_id`, etc. are available
+  immediately after parsing without extra plumbing.
+
+- **`TokenKeeper.currentTokenStream()`** — a `Stream<Token?>` that
+  immediately emits the current stored token (the result of `peek()`) and
+  then forwards every subsequent change from `tokenStream`. Replaces the
+  common "seed + subscribe" boilerplate:
+
+  ```dart
+  // before
+  final initial = await keeper.peek();
+  keeper.tokenStream.listen(...);
+
+  // after
+  keeper.currentTokenStream().listen(...);
+  ```
+
+  The first emission is `null` when storage is empty, so the stream is always
+  safe to listen to regardless of auth state.
+
+- **`TokenKeeper.onEvent<T extends TokenEvent>()`** — a typed stream of
+  lifecycle events filtered to a single event type. Cleaner than calling
+  `.where(...).cast<T>()` manually:
+
+  ```dart
+  keeper.onEvent<TokenRefreshedEvent>().listen((e) {
+    print('refreshed: ${e.token.maskedAccessToken}');
+  });
+
+  keeper.onEvent<TokenClearedEvent>().listen((_) => router.go('/login'));
+  ```
+
+- **`TokenRefreshTimer.runNow()`** — triggers an immediate token check
+  outside the normal periodic schedule. The periodic timer continues
+  unaffected. Useful when the app returns from background and you want to
+  proactively validate / refresh the token without waiting for the next tick.
+  A no-op when the timer has already been `dispose`d.
+
+- **`CachingTokenStorage.refresh()`** — combines `invalidate()` + `read()`
+  into a single async call. Returns the freshly loaded token (`null` if the
+  backing store is empty). Handy after a cross-isolate write where the
+  in-memory cache is known to be stale:
+
+  ```dart
+  final fresh = await cachingStorage.refresh();
+  ```
+
 ## [1.1.2] — 2026-05-15
 
 ### Added

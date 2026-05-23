@@ -78,6 +78,16 @@ class TokenRefreshTimer {
     _log(LogLevel.debug, 'TokenRefreshTimer stopped');
   }
 
+  /// Triggers an immediate token check outside the regular periodic schedule.
+  ///
+  /// Useful when the app returns from background and you want to proactively
+  /// refresh without waiting for the next tick. The periodic schedule
+  /// continues unaffected. A no-op if the timer has been [dispose]d.
+  Future<void> runNow() {
+    if (_disposed) return Future.value();
+    return _tick();
+  }
+
   /// Stops the timer permanently. The [TokenRefreshTimer] cannot be restarted
   /// after this.
   void dispose() {
