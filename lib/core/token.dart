@@ -96,8 +96,16 @@ class Token extends Equatable {
       }
 
       const standardClaims = {
-        'exp', 'iat', 'nbf', 'iss', 'sub', 'aud', 'jti',
-        'scope', 'scp', 'scopes',
+        'exp',
+        'iat',
+        'nbf',
+        'iss',
+        'sub',
+        'aud',
+        'jti',
+        'scope',
+        'scp',
+        'scopes',
       };
       final metadata = Map<String, dynamic>.unmodifiable(
         Map.fromEntries(
@@ -268,7 +276,8 @@ class Token extends Equatable {
       };
 
   @override
-  List<Object?> get props => [accessToken, refreshToken, expiresAt, scopes, metadata];
+  List<Object?> get props =>
+      [accessToken, refreshToken, expiresAt, scopes, metadata];
 
   @override
   bool get stringify => false;

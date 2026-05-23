@@ -210,8 +210,7 @@ void main() {
       addTearDown(keeper.dispose);
 
       final clearedEvents = <TokenClearedEvent>[];
-      final sub =
-          keeper.onEvent<TokenClearedEvent>().listen(clearedEvents.add);
+      final sub = keeper.onEvent<TokenClearedEvent>().listen(clearedEvents.add);
       addTearDown(sub.cancel);
 
       await keeper.setTokens(const Token(accessToken: 'a'));
