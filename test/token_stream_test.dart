@@ -128,6 +128,122 @@ void main() {
     });
   });
 
+  group('TokenKeeper.currentTokenStream', () {
+    test('emits null first when storage is empty', () async {
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final first = await keeper.currentTokenStream().first;
+      expect(first, isNull);
+    });
+
+    test('emits stored token first when one exists', () async {
+      const t = Token(accessToken: 'initial');
+      await storage.write(t);
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final first = await keeper.currentTokenStream().first;
+      expect(first, t);
+    });
+
+    test('continues emitting after the seed value on token changes', () async {
+      const initial = Token(accessToken: 'v1');
+      await storage.write(initial);
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final received = <Token?>[];
+      final sub = keeper.currentTokenStream().listen(received.add);
+      addTearDown(sub.cancel);
+
+      await Future<void>.delayed(Duration.zero);
+      await keeper.setTokens(const Token(accessToken: 'v2'));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(received.first, initial);
+      expect(received.last!.accessToken, 'v2');
+      expect(received.length, 2);
+    });
+  });
+
+  group('TokenKeeper.onEvent', () {
+    test('emits only events matching the type parameter', () async {
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final refreshedEvents = <TokenRefreshedEvent>[];
+      final sub =
+          keeper.onEvent<TokenRefreshedEvent>().listen(refreshedEvents.add);
+      addTearDown(sub.cancel);
+
+      await keeper.setTokens(const Token(accessToken: 'a'));
+      await keeper.clear();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(refreshedEvents, hasLength(1));
+      expect(refreshedEvents.single.token.accessToken, 'a');
+    });
+
+    test('does not emit when no events of that type occur', () async {
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final clearedEvents = <TokenClearedEvent>[];
+      final sub = keeper.onEvent<TokenClearedEvent>().listen(clearedEvents.add);
+      addTearDown(sub.cancel);
+
+      await keeper.setTokens(const Token(accessToken: 'a'));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(clearedEvents, isEmpty);
+    });
+
+    test('RefreshFailedEvent filtered correctly', () async {
+      await storage.write(Token(
+        accessToken: 'old',
+        expiresAt: now.subtract(const Duration(seconds: 1)),
+      ));
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async =>
+            const Error(Failure.network(message: 'timeout')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final failures = <RefreshFailedEvent>[];
+      final sub = keeper.onEvent<RefreshFailedEvent>().listen(failures.add);
+      addTearDown(sub.cancel);
+
+      await keeper.getValidToken();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(failures, hasLength(1));
+      expect(failures.single.failure.message, 'timeout');
+    });
+  });
+
   group('TokenRefreshTimer', () {
     test('does not refresh when token is valid', () async {
       await storage.write(Token(
@@ -229,6 +345,60 @@ void main() {
       timer.dispose();
       timer.start();
       expect(timer.isRunning, isFalse);
+    });
+
+    test('runNow triggers an immediate check outside the schedule', () async {
+      await storage.write(Token(
+        accessToken: 'old',
+        expiresAt: now.subtract(const Duration(seconds: 1)),
+      ));
+
+      var refreshCalls = 0;
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (current) async {
+          refreshCalls++;
+          return Success(current.copyWith(
+            accessToken: 'fresh',
+            expiresAt: now.add(const Duration(hours: 1)),
+          ));
+        },
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final timer = TokenRefreshTimer(
+        keeper: keeper,
+        checkInterval: const Duration(hours: 1),
+        clock: clock,
+      );
+      addTearDown(timer.dispose);
+
+      await timer.runNow();
+      expect(refreshCalls, 1);
+    });
+
+    test('runNow is a no-op after dispose', () async {
+      await storage.write(const Token(accessToken: 'a'));
+      var refreshCalls = 0;
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async {
+          refreshCalls++;
+          return const Error(Failure.unknown(message: 'no'));
+        },
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      final timer = TokenRefreshTimer(
+        keeper: keeper,
+        checkInterval: const Duration(hours: 1),
+        clock: clock,
+      );
+      timer.dispose();
+      await timer.runNow();
+      expect(refreshCalls, 0);
     });
   });
 }

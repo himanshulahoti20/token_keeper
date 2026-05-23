@@ -6,13 +6,19 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![CI](https://github.com/himanshulahoti20/token_keeper/actions/workflows/dart_ci.yml/badge.svg?branch=main&cache_bust=1)
 
-> Auth tokens, handled — now powered by [`resilify`](https://pub.dev/packages/resilify).
+<!-- tech -->
+[![Flutter ≥3.10](https://img.shields.io/badge/flutter-%E2%89%A53.10-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
+[![Dart ≥3.3](https://img.shields.io/badge/dart-%E2%89%A53.3-0175C2?logo=dart&logoColor=white)](https://dart.dev)
+[![platforms](https://img.shields.io/badge/platform-android%20%7C%20ios%20%7C%20macos%20%7C%20web%20%7C%20linux%20%7C%20windows-lightgrey)](https://pub.dev/packages/token_keeper)
+
+> Auth tokens, handled — powered by [`resilify`](https://pub.dev/packages/resilify).
 
 A pure-Dart token manager that gives you **single-flight refresh**,
 **proactive expiry**, **clean `Result<T>` APIs** (via `resilify`),
-**reactive token streams**, **JWT parsing**, a **caching storage decorator**,
-a **background refresh timer**, and a drop-in **Dio interceptor** — without
-locking you into a transport, storage backend, or auth scheme.
+**reactive token streams**, **JWT parsing with metadata extraction**,
+a **caching storage decorator**, a **background refresh timer**, and a
+drop-in **Dio interceptor** — without locking you into a transport, storage
+backend, or auth scheme.
 
 No exceptions cross the public surface. No global state. No Flutter
 dependency in the core. No surprise duplicate refresh calls when 50 requests
@@ -26,9 +32,9 @@ the refresh, log out on permanent failure. Most implementations get
 concurrency wrong (two refreshes for the same response burst) or leak
 exceptions through `try/catch` mazes.
 
-`token_keeper` is the small, well-tested core that gets it right — and as of
-**1.1.0** it shares its `Result` / `Failure` model with `resilify`, so token
-errors slot into the same vocabulary as the rest of your API stack.
+`token_keeper` is the small, well-tested core that gets it right — it shares
+its `Result` / `Failure` model with `resilify`, so token errors slot into the
+same vocabulary as the rest of your API stack.
 
 ## Features
 
@@ -42,15 +48,25 @@ errors slot into the same vocabulary as the rest of your API stack.
   under the hood. Built-in `RefreshRetryConfig.exponential`.
 - **`withValidToken`** — wrap any operation; auto-refresh + one bounded
   retry on `401`. No infinite loops.
+- **`Token.metadata`** — arbitrary `Map<String, dynamic>` for extra claims
+  (tenant IDs, roles, feature flags). Populated automatically from
+  non-standard JWT payload claims by `tryParseJwt`.
+- **`currentTokenStream()`** — seeded stream that immediately emits the
+  current stored token, then forwards every subsequent change. Replaces the
+  common seed-then-subscribe boilerplate.
+- **`onEvent<T>()`** — typed event stream filter; subscribe directly to the
+  event type you care about (`TokenRefreshedEvent`, `TokenClearedEvent`,
+  `RefreshFailedEvent`) without manual casting.
 - **Reactive `tokenStream`** — `Stream<Token?>` of token changes.
 - **Lifecycle events** — `TokenRefreshedEvent`, `TokenClearedEvent`,
   `RefreshFailedEvent` on a broadcast `Stream`.
-- **`Token.tryParseJwt`** — pure-Dart JWT parser, auto-fills `expiresAt` and
-  scopes from claims; returns `null` on bad input.
+- **`Token.tryParseJwt`** — pure-Dart JWT parser, auto-fills `expiresAt`,
+  scopes, and `metadata` from claims; returns `null` on bad input.
 - **`CachingTokenStorage`** — in-memory cache decorator on top of any
-  backend (e.g. `flutter_secure_storage`).
+  backend (e.g. `flutter_secure_storage`). Includes `refresh()` for a
+  combined invalidate + reload in one call.
 - **`TokenRefreshTimer`** — periodic background refresh for long-lived
-  services.
+  services, with `runNow()` for immediate out-of-schedule checks.
 - **Dio interceptor** — attaches `Authorization`, retries once on `401`.
 - **Pluggable clock & logger** — `FixedClock` for tests, `TokenKeeperLogger`
   hook with zero logging dependency.
@@ -59,7 +75,7 @@ errors slot into the same vocabulary as the rest of your API stack.
 
 ```yaml
 dependencies:
-  token_keeper: ^1.1.2
+  token_keeper: ^1.2.0
   # Pulled in transitively, but list it if you import resilify directly.
   # resilify: ^1.0.6
 ```
@@ -103,10 +119,14 @@ final keeper = TokenKeeper(
 final api = Dio();
 api.interceptors.add(TokenKeeperInterceptor(keeper: keeper, dio: api));
 
-// Listen for logout.
-keeper.events.listen((event) {
-  if (event is TokenClearedEvent) navigator.toLogin();
+// Seed + subscribe in one call — emits the current token immediately,
+// then every subsequent change.
+keeper.currentTokenStream().listen((token) {
+  if (token == null) navigator.toLogin();
 });
+
+// Or subscribe to a specific event type.
+keeper.onEvent<TokenClearedEvent>().listen((_) => navigator.toLogin());
 
 // Seed after login.
 await keeper.setTokens(Token(accessToken: '...', refreshToken: '...', expiresAt: ...));
@@ -125,6 +145,7 @@ final me = await api.get('/me');
 | `refreshToken` | `String?` | nullable for client-credentials flows |
 | `expiresAt` | `DateTime?` | null = non-expiring |
 | `scopes` | `List<String>` | granted scopes |
+| `metadata` | `Map<String, dynamic>` | extra claims; defaults to `{}` |
 
 ```dart
 // Lifecycle
@@ -144,13 +165,39 @@ token.isValidWithAnyScope(['admin', 'owner']);      // expiry + scopes
 
 // Construction / serialization
 token.copyWith(accessToken: 'x', clearRefreshToken: true);
+token.copyWith(metadata: {'tenant': 'acme'});
 Token.fromJson(token.toJson());
 Token.fromJsonOrNull(maybeCorruptJson);             // null on bad input
-Token.tryParseJwt(jwt, refreshToken: rt);           // null on bad input
-
+Token.tryParseJwt(jwt, refreshToken: rt);           // null on bad input;
+                                                    // populates metadata from
+                                                    // non-standard JWT claims
 // Logging-safe representation
 print(token.maskedAccessToken);                     // "eyJh…sR2c"
 ```
+
+#### `Token.metadata`
+
+`metadata` carries arbitrary extra data alongside the token pair. When you
+call `Token.tryParseJwt`, all non-standard JWT payload claims are captured
+automatically. Standard claims (`exp`, `iat`, `nbf`, `iss`, `sub`, `aud`,
+`jti`, `scope`, `scp`, `scopes`) are excluded.
+
+```dart
+// From a JWT with custom claims
+final token = Token.tryParseJwt(jwtString);
+print(token!.metadata['tenant_id']);  // e.g. 'acme'
+print(token.metadata['role']);        // e.g. 'admin'
+
+// Or set it directly
+final t = Token(
+  accessToken: '...',
+  metadata: {'tenant_id': 'acme', 'role': 'admin'},
+);
+```
+
+`metadata` is included in `==` / `hashCode` (via `Equatable`), round-trips
+through `toJson` / `fromJson`, and is accepted by `copyWith`. The `metadata`
+key is omitted from JSON output when the map is empty.
 
 ### `Result<T>` and `Failure` (re-exported from `resilify`)
 
@@ -201,15 +248,17 @@ TokenKeeper({
 });
 
 Future<Result<Token>> getValidToken();
-Future<Result<Token>> refreshIfNeeded();   // alias of getValidToken
+Future<Result<Token>> refreshIfNeeded();        // alias of getValidToken
 Future<Result<R>>     withValidToken<R>(Future<Result<R>> Function(Token) op);
 Future<Result<Token>> forceRefresh();
 Future<void>          setTokens(Token token);
 Future<void>          clear();
 Future<Token?>        peek();
-bool                  get isRefreshing;    // sync — true while refresh in flight
+bool                  get isRefreshing;         // sync — true while refreshing
 Stream<TokenEvent>    get events;
-Stream<Token?>        get tokenStream;     // reactive token changes
+Stream<Token?>        get tokenStream;          // reactive token changes
+Stream<Token?>        currentTokenStream();     // seed + subscribe in one call
+Stream<T>             onEvent<T extends TokenEvent>(); // typed event filter
 Future<void>          dispose();
 ```
 
@@ -220,6 +269,39 @@ Future<void>          dispose();
 3. If the operation returns `Failure(unauthorized)`, force-refresh once and
    retry exactly once. Any further failure is returned as-is. **No infinite
    loops.**
+
+#### `currentTokenStream()`
+
+Replaces the common seed-then-subscribe pattern:
+
+```dart
+// before
+final initial = await keeper.peek();
+myState.token = initial;
+keeper.tokenStream.listen((t) => myState.token = t);
+
+// after
+keeper.currentTokenStream().listen((t) => myState.token = t);
+```
+
+The first emission is `null` when storage is empty, so it is always safe to
+listen to regardless of auth state.
+
+#### `onEvent<T>()`
+
+Subscribe to a specific event type without filtering manually:
+
+```dart
+keeper.onEvent<TokenRefreshedEvent>().listen((e) {
+  analytics.track('token_refreshed', {'masked': e.token.maskedAccessToken});
+});
+
+keeper.onEvent<TokenClearedEvent>().listen((_) => router.go('/login'));
+
+keeper.onEvent<RefreshFailedEvent>().listen((e) {
+  logger.error('refresh failed: ${e.failure.message}');
+});
+```
 
 ### Storage
 
@@ -245,7 +327,8 @@ final storage = CachingTokenStorage(SecureStorageAdapter());
 await storage.warmup();        // optional: prime the cache at app startup
 storage.isCached;              // sync bool — has the cache loaded yet?
 storage.cachedToken;           // sync read of the last-loaded token
-storage.invalidate();          // drop the cache, e.g. after cross-isolate write
+storage.invalidate();          // drop the cache, e.g. before a cross-isolate read
+await storage.refresh();       // invalidate + reload in one call; returns Token?
 ```
 
 #### Implementing a secure storage adapter
@@ -290,7 +373,8 @@ final class RefreshFailedEvent  extends TokenEvent { final Failure failure; }
 All three implement `Equatable` and have redacted `toString()` overrides so
 they're directly usable in tests, log lines, and reactive state layers.
 
-A typical logout listener:
+Use `onEvent<T>()` for typed subscriptions, or `events` with a `switch` for
+exhaustive handling:
 
 ```dart
 keeper.events.listen((event) {
@@ -302,14 +386,53 @@ keeper.events.listen((event) {
 });
 ```
 
-For reactive UI, prefer `tokenStream`:
+For reactive UI, prefer `currentTokenStream()`:
 
 ```dart
-keeper.tokenStream.listen((token) {
+keeper.currentTokenStream().listen((token) {
   // null after clear() or unauthorized refresh failure;
-  // new Token after refresh / setTokens.
+  // current token on subscribe, then new Token after refresh / setTokens.
 });
 ```
+
+### `TokenRefreshTimer`
+
+Periodically calls `getValidToken()` to keep the stored token warm. Primarily
+useful for **background services** or daemon processes where HTTP requests may
+not fire frequently enough to trigger the on-demand refresh in
+`getValidToken`. For on-demand Flutter UI, the `proactiveWindow` on
+`TokenKeeper` is usually sufficient and you don't need this class.
+
+```dart
+final timer = TokenRefreshTimer(
+  keeper: keeper,
+  checkInterval: const Duration(minutes: 5),
+);
+timer.start();
+
+// Trigger an immediate check outside the schedule, e.g. when the app
+// returns from background.
+await timer.runNow();
+
+// When done (e.g. user logs out).
+timer.dispose();
+```
+
+Configure the keeper with a `proactiveWindow` larger than `checkInterval` so
+the periodic tick has a chance to refresh before actual expiry:
+
+```dart
+TokenKeeper(proactiveWindow: const Duration(minutes: 10), ...);
+TokenRefreshTimer(keeper: keeper, checkInterval: const Duration(minutes: 5));
+```
+
+| Member | Description |
+| --- | --- |
+| `start()` | Begin periodic checks. No-op if already running or disposed. |
+| `stop()` | Pause. Call `start()` to resume. |
+| `runNow()` | Immediate check outside the schedule. No-op if disposed. |
+| `dispose()` | Stop permanently. Cannot be restarted. |
+| `isRunning` | `bool` — whether the timer is currently ticking. |
 
 ### Dio interceptor
 
@@ -318,15 +441,16 @@ final api = Dio();
 api.interceptors.add(TokenKeeperInterceptor(
   keeper: keeper,
   dio: api,
-  headerName: 'Authorization', // optional
-  scheme: 'Bearer',            // optional
-  shouldRefreshOn: (response) => response?.statusCode == 401, // optional
+  headerName: 'Authorization',                            // optional
+  scheme: 'Bearer',                                       // optional
+  shouldRefreshOn: (r) => r?.statusCode == 401,           // optional
+  onRefreshFailed: (_) => router.go('/login'),            // optional
 ));
 ```
 
-To bypass the interceptor for a single request (e.g. login or refresh), set
-`Options(extra: {'token_keeper_skip_auth': true})` or call
-`requestOptions.skipTokenKeeper()`.
+To bypass the interceptor for a single request (e.g. the login or refresh
+endpoint itself), set `Options(extra: {'token_keeper_skip_auth': true})` or
+call `requestOptions.skipTokenKeeper()`.
 
 ### Retry config
 
@@ -336,7 +460,6 @@ retried because the auth grant is dead):
 
 ```dart
 TokenKeeper(
-  // ...
   retryConfig: RefreshRetryConfig.exponential(
     maxAttempts: 4,
     delay: const Duration(milliseconds: 250),
@@ -363,7 +486,6 @@ rest of the resilify ecosystem.
 
 ```dart
 TokenKeeper(
-  // ...
   logger: (level, message, {error, stackTrace}) {
     print('[token_keeper:${level.name}] $message');
   },
@@ -427,9 +549,12 @@ lib/
 
 test/
   token_test.dart
-  result_test.dart
+  token_extras_test.dart
+  token_jwt_test.dart
   in_memory_storage_test.dart
+  caching_storage_test.dart
   token_keeper_test.dart
+  token_stream_test.dart
   token_keeper_interceptor_test.dart
 
 example/

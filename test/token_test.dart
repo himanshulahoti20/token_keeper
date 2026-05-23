@@ -66,5 +66,55 @@ void main() {
       expect(a, b);
       expect(a.hashCode, b.hashCode);
     });
+
+    group('metadata', () {
+      test('defaults to empty map', () {
+        const t = Token(accessToken: 'a');
+        expect(t.metadata, isEmpty);
+      });
+
+      test('copyWith replaces metadata', () {
+        const t = Token(accessToken: 'a', metadata: {'tenant': 'acme'});
+        final updated = t.copyWith(metadata: {'tenant': 'globex'});
+        expect(updated.metadata['tenant'], 'globex');
+        expect(t.metadata['tenant'], 'acme');
+      });
+
+      test('copyWith without metadata argument preserves original', () {
+        const t = Token(accessToken: 'a', metadata: {'k': 'v'});
+        final copy = t.copyWith(accessToken: 'b');
+        expect(copy.metadata, {'k': 'v'});
+      });
+
+      test('toJson omits metadata key when empty', () {
+        const t = Token(accessToken: 'a');
+        expect(t.toJson().containsKey('metadata'), isFalse);
+      });
+
+      test('toJson includes metadata when non-empty', () {
+        const t = Token(accessToken: 'a', metadata: {'uid': '42'});
+        expect(t.toJson()['metadata'], {'uid': '42'});
+      });
+
+      test('fromJson round-trips metadata', () {
+        const t = Token(
+          accessToken: 'a',
+          metadata: {'tenant': 'acme', 'role': 'admin'},
+        );
+        final round = Token.fromJson(t.toJson());
+        expect(round.metadata, t.metadata);
+      });
+
+      test('fromJson without metadata key returns empty map', () {
+        final t = Token.fromJson({'accessToken': 'a'});
+        expect(t.metadata, isEmpty);
+      });
+
+      test('tokens with different metadata are not equal', () {
+        const a = Token(accessToken: 'x', metadata: {'k': '1'});
+        const b = Token(accessToken: 'x', metadata: {'k': '2'});
+        expect(a, isNot(b));
+      });
+    });
   });
 }

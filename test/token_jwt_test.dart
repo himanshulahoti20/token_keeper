@@ -70,5 +70,55 @@ void main() {
       final body = base64Url.encode(utf8.encode('"just-a-string"'));
       expect(Token.tryParseJwt('h.$body.s'), isNull);
     });
+
+    test('populates metadata with non-standard claims', () {
+      final exp = DateTime.utc(2030, 6, 1).millisecondsSinceEpoch ~/ 1000;
+      final token = Token.tryParseJwt(_makeJwt({
+        'exp': exp,
+        'sub': 'user-1',
+        'iss': 'https://auth.example.com',
+        'tenant_id': 'acme',
+        'role': 'admin',
+        'custom_flag': true,
+      }));
+      expect(token, isNotNull);
+      expect(token!.metadata['tenant_id'], 'acme');
+      expect(token.metadata['role'], 'admin');
+      expect(token.metadata['custom_flag'], true);
+    });
+
+    test('excludes standard claims from metadata', () {
+      final exp = DateTime.utc(2030, 6, 1).millisecondsSinceEpoch ~/ 1000;
+      final token = Token.tryParseJwt(_makeJwt({
+        'exp': exp,
+        'iat': 1000,
+        'nbf': 1000,
+        'iss': 'issuer',
+        'sub': 'user-1',
+        'aud': 'api',
+        'jti': 'abc123',
+        'scope': 'read write',
+        'scp': 'read',
+        'scopes': ['read'],
+        'tenant_id': 'acme',
+      }));
+      expect(token!.metadata.containsKey('exp'), isFalse);
+      expect(token.metadata.containsKey('iat'), isFalse);
+      expect(token.metadata.containsKey('nbf'), isFalse);
+      expect(token.metadata.containsKey('iss'), isFalse);
+      expect(token.metadata.containsKey('sub'), isFalse);
+      expect(token.metadata.containsKey('aud'), isFalse);
+      expect(token.metadata.containsKey('jti'), isFalse);
+      expect(token.metadata.containsKey('scope'), isFalse);
+      expect(token.metadata.containsKey('scp'), isFalse);
+      expect(token.metadata.containsKey('scopes'), isFalse);
+      expect(token.metadata['tenant_id'], 'acme');
+    });
+
+    test('metadata is empty when no non-standard claims are present', () {
+      final exp = DateTime.utc(2030, 6, 1).millisecondsSinceEpoch ~/ 1000;
+      final token = Token.tryParseJwt(_makeJwt({'exp': exp, 'sub': 'u'}));
+      expect(token!.metadata, isEmpty);
+    });
   });
 }

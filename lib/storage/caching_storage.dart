@@ -76,4 +76,14 @@ class CachingTokenStorage implements TokenStorage {
     _loaded = false;
     _cache = null;
   }
+
+  /// Invalidates the cache and immediately reloads from the backing store.
+  ///
+  /// Returns the freshly loaded token (`null` if the backing store is empty).
+  /// More convenient than calling [invalidate] followed by [read] separately —
+  /// useful after a cross-isolate write where the in-memory cache is stale.
+  Future<Token?> refresh() {
+    invalidate();
+    return read();
+  }
 }

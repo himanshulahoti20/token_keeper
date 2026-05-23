@@ -96,6 +96,34 @@ class TokenKeeper {
   /// subscribing to [events].
   bool get isRefreshing => _refreshCompleter != null;
 
+  /// Returns a [Stream] that immediately emits the current stored token and
+  /// then continues with every subsequent change from [tokenStream].
+  ///
+  /// The first emission is `null` if storage is empty. This combines the
+  /// common "seed + subscribe" pattern into a single call:
+  ///
+  /// ```dart
+  /// keeper.currentTokenStream().listen((token) {
+  ///   // token: current value on subscribe, then live updates
+  /// });
+  /// ```
+  Stream<Token?> currentTokenStream() async* {
+    yield await peek();
+    yield* tokenStream;
+  }
+
+  /// Returns a typed stream of [TokenEvent]s filtered to events of type [T].
+  ///
+  /// Cleaner at call sites than manually calling `.whereType<T>()`:
+  ///
+  /// ```dart
+  /// keeper.onEvent<TokenRefreshedEvent>().listen((e) {
+  ///   print('new token: ${e.token.maskedAccessToken}');
+  /// });
+  /// ```
+  Stream<T> onEvent<T extends TokenEvent>() =>
+      events.where((e) => e is T).cast<T>();
+
   /// Returns the stored token without touching the network.
   ///
   /// Useful for UI bootstrapping (e.g. "are we logged in at all?"). Does NOT

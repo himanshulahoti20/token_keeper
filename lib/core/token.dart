@@ -7,6 +7,10 @@ import 'package:equatable/equatable.dart';
 /// `expiresAt` is optional: not all auth schemes expose lifetime information.
 /// When it's `null`, the token is considered non-expiring and proactive
 /// refresh is disabled for it.
+///
+/// `metadata` carries arbitrary extra claims — tenant IDs, user IDs, feature
+/// flags, or any non-standard JWT payload fields. [tryParseJwt] populates it
+/// automatically from non-standard claims.
 class Token extends Equatable {
   /// Creates an immutable [Token].
   const Token({
@@ -14,6 +18,7 @@ class Token extends Equatable {
     this.refreshToken,
     this.expiresAt,
     this.scopes = const [],
+    this.metadata = const {},
   });
 
   /// Reconstructs a [Token] from its [toJson] form.
@@ -26,12 +31,17 @@ class Token extends Equatable {
         ? List<String>.unmodifiable(rawScopes.map((e) => e as String))
         : const <String>[];
     final rawExpires = json['expiresAt'];
+    final rawMetadata = json['metadata'];
+    final metadata = rawMetadata is Map<String, dynamic>
+        ? Map<String, dynamic>.unmodifiable(rawMetadata)
+        : const <String, dynamic>{};
     return Token(
       accessToken: json['accessToken'] as String,
       refreshToken: json['refreshToken'] as String?,
       expiresAt:
           rawExpires == null ? null : DateTime.parse(rawExpires as String),
       scopes: scopes,
+      metadata: metadata,
     );
   }
 
@@ -85,11 +95,30 @@ class Token extends Equatable {
         scopes = List<String>.unmodifiable(scopeClaim.cast<String>());
       }
 
+      const standardClaims = {
+        'exp',
+        'iat',
+        'nbf',
+        'iss',
+        'sub',
+        'aud',
+        'jti',
+        'scope',
+        'scp',
+        'scopes',
+      };
+      final metadata = Map<String, dynamic>.unmodifiable(
+        Map.fromEntries(
+          claims.entries.where((e) => !standardClaims.contains(e.key)),
+        ),
+      );
+
       return Token(
         accessToken: jwt,
         refreshToken: refreshToken,
         expiresAt: expiresAt,
         scopes: scopes,
+        metadata: metadata,
       );
     } catch (_) {
       return null;
@@ -108,6 +137,14 @@ class Token extends Equatable {
 
   /// Scopes granted with this token.
   final List<String> scopes;
+
+  /// Arbitrary extra data associated with this token.
+  ///
+  /// Use this to carry non-standard JWT claims (e.g. tenant ID, user ID,
+  /// feature flags) or any custom fields returned alongside the token
+  /// response. [tryParseJwt] populates this automatically from all
+  /// non-standard claims in the JWT payload.
+  final Map<String, dynamic> metadata;
 
   /// Returns `true` if [expiresAt] is non-null and not in the future.
   ///
@@ -215,6 +252,7 @@ class Token extends Equatable {
     String? refreshToken,
     DateTime? expiresAt,
     List<String>? scopes,
+    Map<String, dynamic>? metadata,
     bool clearRefreshToken = false,
     bool clearExpiresAt = false,
   }) {
@@ -224,6 +262,7 @@ class Token extends Equatable {
           clearRefreshToken ? null : (refreshToken ?? this.refreshToken),
       expiresAt: clearExpiresAt ? null : (expiresAt ?? this.expiresAt),
       scopes: scopes ?? this.scopes,
+      metadata: metadata ?? this.metadata,
     );
   }
 
@@ -233,10 +272,12 @@ class Token extends Equatable {
         'refreshToken': refreshToken,
         'expiresAt': expiresAt?.toIso8601String(),
         'scopes': scopes,
+        if (metadata.isNotEmpty) 'metadata': metadata,
       };
 
   @override
-  List<Object?> get props => [accessToken, refreshToken, expiresAt, scopes];
+  List<Object?> get props =>
+      [accessToken, refreshToken, expiresAt, scopes, metadata];
 
   @override
   bool get stringify => false;

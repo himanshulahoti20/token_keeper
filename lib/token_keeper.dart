@@ -1,4 +1,4 @@
-/// `token_keeper` 1.1.2 — auth tokens, handled, on top of `resilify`.
+/// `token_keeper` 1.2.0 — auth tokens, handled, on top of `resilify`.
 ///
 /// This barrel re-exports the public surface plus the entire `resilify`
 /// `Result<T>` / `Failure` API. The optional Dio integration lives in
