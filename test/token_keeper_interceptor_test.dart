@@ -204,6 +204,59 @@ void main() {
     );
   });
 
+  test('onTokenAttached is called with the token and request options',
+      () async {
+    await storage.write(Token(
+      accessToken: 'live-token',
+      expiresAt: clock.now().add(const Duration(hours: 1)),
+    ));
+
+    final keeper = TokenKeeper(
+      storage: storage,
+      refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+      clock: clock,
+    );
+    addTearDown(keeper.dispose);
+
+    Token? attached;
+    String? attachedPath;
+    dio.interceptors.add(TokenKeeperInterceptor(
+      keeper: keeper,
+      dio: dio,
+      onTokenAttached: (token, options) {
+        attached = token;
+        attachedPath = options.path;
+      },
+    ));
+    adapter.enqueue((_) => _json({'ok': true}, 200));
+
+    await dio.get<Map<String, dynamic>>('/profile');
+
+    expect(attached, isNotNull);
+    expect(attached!.accessToken, 'live-token');
+    expect(attachedPath, '/profile');
+  });
+
+  test('onTokenAttached is not called when no token is available', () async {
+    final keeper = TokenKeeper(
+      storage: storage,
+      refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+      clock: clock,
+    );
+    addTearDown(keeper.dispose);
+
+    var called = false;
+    dio.interceptors.add(TokenKeeperInterceptor(
+      keeper: keeper,
+      dio: dio,
+      onTokenAttached: (_, __) => called = true,
+    ));
+    adapter.enqueue((_) => _json({'ok': true}, 200));
+
+    await dio.get<Map<String, dynamic>>('/public');
+    expect(called, isFalse);
+  });
+
   test('onRefreshFailed callback receives the Failure', () async {
     await storage.write(Token(
       accessToken: 'old',

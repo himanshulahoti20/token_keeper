@@ -17,7 +17,7 @@ import 'token_storage.dart';
 ///
 /// All writes and deletes flow through to the backing store *and* update the
 /// cache atomically. If another process or isolate may modify the underlying
-/// store, call [invalidate] before reading to bypass the cache.
+/// store, call [invalidate] (or [refresh]) to bypass the cache.
 class CachingTokenStorage implements TokenStorage {
   /// Creates a caching layer on top of [backing].
   CachingTokenStorage(this._backing);
@@ -26,6 +26,11 @@ class CachingTokenStorage implements TokenStorage {
 
   Token? _cache;
   bool _loaded = false;
+
+  /// In-flight backing-store load. Shared across concurrent callers so the
+  /// backing store is read at most once even if [read] and [warmup] are
+  /// awaited concurrently before the first load completes.
+  Future<Token?>? _pendingLoad;
 
   /// Returns the cached token synchronously without going to the backing
   /// store. Returns `null` if the cache has not been populated yet.
@@ -42,25 +47,25 @@ class CachingTokenStorage implements TokenStorage {
   /// Call this once during app startup so the first [read] on the request
   /// hot path doesn't pay for backing-store I/O. Subsequent calls are
   /// no-ops unless the cache has been [invalidate]d.
+  ///
+  /// Concurrent calls share a single backing-store read rather than issuing
+  /// multiple I/O requests.
   Future<void> warmup() async {
     if (_loaded) return;
-    _cache = await _backing.read();
-    _loaded = true;
+    await _load();
   }
 
   @override
-  Future<Token?> read() async {
-    if (!_loaded) {
-      _cache = await _backing.read();
-      _loaded = true;
-    }
-    return _cache;
+  Future<Token?> read() {
+    if (_loaded) return Future.value(_cache);
+    return _load();
   }
 
   @override
   Future<void> write(Token token) async {
     _cache = token;
     _loaded = true;
+    _pendingLoad = null;
     await _backing.write(token);
   }
 
@@ -68,6 +73,7 @@ class CachingTokenStorage implements TokenStorage {
   Future<void> delete() async {
     _cache = null;
     _loaded = true;
+    _pendingLoad = null;
     await _backing.delete();
   }
 
@@ -75,6 +81,7 @@ class CachingTokenStorage implements TokenStorage {
   void invalidate() {
     _loaded = false;
     _cache = null;
+    _pendingLoad = null;
   }
 
   /// Invalidates the cache and immediately reloads from the backing store.
@@ -85,5 +92,15 @@ class CachingTokenStorage implements TokenStorage {
   Future<Token?> refresh() {
     invalidate();
     return read();
+  }
+
+  /// Single backing-store read, deduplicated across concurrent callers.
+  Future<Token?> _load() {
+    return _pendingLoad ??= _backing.read().then((token) {
+      _cache = token;
+      _loaded = true;
+      _pendingLoad = null;
+      return token;
+    });
   }
 }

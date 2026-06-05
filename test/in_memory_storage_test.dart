@@ -33,6 +33,24 @@ void main() {
       expect(s.snapshot, isNull);
     });
 
+    group('exists() extension (1.3.0)', () {
+      test('returns false when storage is empty', () async {
+        final s = InMemoryTokenStorage();
+        expect(await s.exists(), isFalse);
+      });
+
+      test('returns true when a token is stored', () async {
+        final s = InMemoryTokenStorage(initial: const Token(accessToken: 'a'));
+        expect(await s.exists(), isTrue);
+      });
+
+      test('returns false after delete', () async {
+        final s = InMemoryTokenStorage(initial: const Token(accessToken: 'a'));
+        await s.delete();
+        expect(await s.exists(), isFalse);
+      });
+    });
+
     test('clone returns an independent copy seeded with current token',
         () async {
       final original = InMemoryTokenStorage(

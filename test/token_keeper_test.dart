@@ -538,6 +538,140 @@ void main() {
     });
   });
 
+  group('hasValidToken (1.3.0)', () {
+    test('returns false when storage is empty', () async {
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+      expect(await keeper.hasValidToken(), isFalse);
+    });
+
+    test('returns true for a non-expired token without triggering refresh',
+        () async {
+      await storage.write(_expiringToken(
+        expiresAt: now.add(const Duration(hours: 1)),
+      ));
+      var refreshCalls = 0;
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async {
+          refreshCalls++;
+          return const Error(Failure.unknown(message: 'no'));
+        },
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      expect(await keeper.hasValidToken(), isTrue);
+      expect(refreshCalls, 0);
+    });
+
+    test('returns false for an expired token without triggering refresh',
+        () async {
+      await storage.write(_expiringToken(
+        expiresAt: now.subtract(const Duration(seconds: 1)),
+      ));
+      var refreshCalls = 0;
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async {
+          refreshCalls++;
+          return const Error(Failure.unknown(message: 'no'));
+        },
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      expect(await keeper.hasValidToken(), isFalse);
+      expect(refreshCalls, 0);
+    });
+  });
+
+  group('lastRefreshAt (1.3.0)', () {
+    test('is null before any refresh', () {
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+      expect(keeper.lastRefreshAt, isNull);
+    });
+
+    test('is set after a successful refresh', () async {
+      await storage.write(_expiringToken(
+        expiresAt: now.subtract(const Duration(seconds: 1)),
+      ));
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (current) async => Success(current.copyWith(
+          accessToken: 'fresh',
+          expiresAt: now.add(const Duration(hours: 1)),
+        )),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      expect(keeper.lastRefreshAt, isNull);
+      await keeper.getValidToken();
+      expect(keeper.lastRefreshAt, now);
+    });
+
+    test('is not set after a failed refresh', () async {
+      await storage.write(_expiringToken(
+        expiresAt: now.subtract(const Duration(seconds: 1)),
+      ));
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async =>
+            const Error(Failure.network(message: 'timeout')),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+
+      await keeper.getValidToken();
+      expect(keeper.lastRefreshAt, isNull);
+    });
+  });
+
+  group('dispose safety (1.3.0)', () {
+    test('calling getValidToken after dispose throws StateError', () async {
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      await keeper.dispose();
+      expect(() => keeper.getValidToken(), throwsStateError);
+    });
+
+    test('calling clear after dispose throws StateError', () async {
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      await keeper.dispose();
+      expect(() => keeper.clear(), throwsStateError);
+    });
+
+    test('calling setTokens after dispose throws StateError', () async {
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher: (_) async => const Error(Failure.unknown(message: 'no')),
+        clock: clock,
+      );
+      await keeper.dispose();
+      expect(
+        () => keeper.setTokens(const Token(accessToken: 'x')),
+        throwsStateError,
+      );
+    });
+  });
+
   group('refreshIfNeeded (1.1.2)', () {
     test('returns the current token when still valid', () async {
       await storage.write(_expiringToken(

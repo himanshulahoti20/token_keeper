@@ -4,6 +4,50 @@ All notable changes to this package will be documented in this file. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-06-05
+
+### Added
+
+- **`Token.subject`** (`String?`) — the JWT `sub` claim. Populated
+  automatically by `tryParseJwt`; `null` for manually constructed tokens
+  that omit it.
+- **`Token.issuer`** (`String?`) — the JWT `iss` claim. Populated
+  automatically by `tryParseJwt`.
+- **`Token.issuedAt`** (`DateTime?`) — the JWT `iat` claim converted to UTC.
+  Populated automatically by `tryParseJwt`. Round-trips through `toJson` /
+  `fromJson` and is included in `==` / `hashCode`. `copyWith` accepts it
+  with a `clearIssuedAt` flag for explicit nulling.
+- **`Token.age([DateTime? now])`** — returns the elapsed time since
+  `issuedAt` as a `Duration?`; `null` when `issuedAt` is not set. Never
+  negative — returns `Duration.zero` on clock skew.
+- **`TokenKeeper.hasValidToken()`** — returns `true` if a non-expired token
+  exists in storage **without triggering a refresh**. The clean "are we
+  logged in?" check for UI code that must not cause side effects.
+- **`TokenKeeper.lastRefreshAt`** — `DateTime?` timestamp of the most recent
+  successful refresh in this keeper's lifetime. Useful for diagnostics,
+  forced-refresh debouncing, and "last synced" UI labels.
+- **`TokenKeeperInterceptor.onTokenAttached`** — optional callback invoked
+  each time a token is successfully attached to an outgoing request. Receives
+  the `Token` and the `RequestOptions` so you can log, audit, or trace
+  per-request auth without a separate `tokenStream` subscription.
+- **`TokenStorage.exists()`** — extension method on any `TokenStorage`
+  implementation; equivalent to `(await read()) != null` but reads more
+  naturally at "presence check" call sites.
+
+### Fixed
+
+- **`TokenKeeper._checkNotDisposed` now throws `StateError` in all build
+  modes.** Previously the guard was an `assert`, which Dart strips in release
+  builds (AOT / `dart compile`). Calling `getValidToken`, `setTokens`,
+  `clear`, `forceRefresh`, or `withValidToken` on a disposed keeper now
+  throws `StateError` consistently in debug *and* release, preventing silent
+  data corruption.
+- **`CachingTokenStorage` concurrent load deduplication.** Concurrent calls
+  to `read()` and/or `warmup()` before the first backing-store load
+  completed could each issue a separate I/O read. All concurrent callers now
+  share a single `Future` (`_pendingLoad`), so the backing store is
+  contacted at most once regardless of how many simultaneous reads arrive.
+
 ## [1.2.0] — 2026-05-23
 
 ### Added

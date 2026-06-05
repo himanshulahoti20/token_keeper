@@ -51,6 +51,22 @@ same vocabulary as the rest of your API stack.
 - **`Token.metadata`** — arbitrary `Map<String, dynamic>` for extra claims
   (tenant IDs, roles, feature flags). Populated automatically from
   non-standard JWT payload claims by `tryParseJwt`.
+- **`Token.subject` / `Token.issuer` / `Token.issuedAt`** — typed JWT claim
+  fields (`sub`, `iss`, `iat`) extracted by `tryParseJwt`. Included in
+  equality, serialisation, and `copyWith`.
+- **`Token.age()`** — time elapsed since `issuedAt` as a `Duration?`; `null`
+  when `issuedAt` is absent, never negative.
+- **`TokenKeeper.hasValidToken()`** — non-refreshing presence check; returns
+  `true` if a non-expired token is in storage. The clean "are we logged in?"
+  check for UI code that must not trigger side effects.
+- **`TokenKeeper.lastRefreshAt`** — `DateTime?` of the most recent successful
+  refresh in this keeper's lifetime; useful for diagnostics, forced-refresh
+  debouncing, and "last synced" labels.
+- **`TokenKeeperInterceptor.onTokenAttached`** — optional callback invoked
+  each time a token header is attached to an outgoing request. Receives the
+  `Token` and `RequestOptions` for per-request logging or tracing.
+- **`TokenStorage.exists()`** — extension method on any `TokenStorage`; reads
+  more naturally than `(await read()) != null` at presence-check call sites.
 - **`currentTokenStream()`** — seeded stream that immediately emits the
   current stored token, then forwards every subsequent change. Replaces the
   common seed-then-subscribe boilerplate.
@@ -75,7 +91,7 @@ same vocabulary as the rest of your API stack.
 
 ```yaml
 dependencies:
-  token_keeper: ^1.2.0
+  token_keeper: ^1.3.0
   # Pulled in transitively, but list it if you import resilify directly.
   # resilify: ^1.0.6
 ```
@@ -146,6 +162,9 @@ final me = await api.get('/me');
 | `expiresAt` | `DateTime?` | null = non-expiring |
 | `scopes` | `List<String>` | granted scopes |
 | `metadata` | `Map<String, dynamic>` | extra claims; defaults to `{}` |
+| `subject` | `String?` | JWT `sub` claim; auto-populated by `tryParseJwt` |
+| `issuer` | `String?` | JWT `iss` claim; auto-populated by `tryParseJwt` |
+| `issuedAt` | `DateTime?` | JWT `iat` (UTC); set by `tryParseJwt` |
 
 ```dart
 // Lifecycle
@@ -155,6 +174,7 @@ token.willExpireWithin(const Duration(seconds: 30));
 token.requiresRefresh();                            // default 5-min window
 token.remainingLifetime();                          // Duration?
 token.expiresInSeconds();                           // OAuth-style int?
+token.age();                                        // elapsed since issuedAt
 
 // Scope checks
 token.hasScope('read:profile');
@@ -166,6 +186,7 @@ token.isValidWithAnyScope(['admin', 'owner']);      // expiry + scopes
 // Construction / serialization
 token.copyWith(accessToken: 'x', clearRefreshToken: true);
 token.copyWith(metadata: {'tenant': 'acme'});
+token.copyWith(subject: 'user-123', clearIssuedAt: true);
 Token.fromJson(token.toJson());
 Token.fromJsonOrNull(maybeCorruptJson);             // null on bad input
 Token.tryParseJwt(jwt, refreshToken: rt);           // null on bad input;
@@ -179,8 +200,9 @@ print(token.maskedAccessToken);                     // "eyJh…sR2c"
 
 `metadata` carries arbitrary extra data alongside the token pair. When you
 call `Token.tryParseJwt`, all non-standard JWT payload claims are captured
-automatically. Standard claims (`exp`, `iat`, `nbf`, `iss`, `sub`, `aud`,
-`jti`, `scope`, `scp`, `scopes`) are excluded.
+automatically. Standard claims (`exp`, `nbf`, `aud`, `jti`, `scope`, `scp`,
+`scopes`) are excluded; `iss`, `sub`, and `iat` are mapped to the typed
+fields `Token.issuer`, `Token.subject`, and `Token.issuedAt` instead.
 
 ```dart
 // From a JWT with custom claims
@@ -254,7 +276,9 @@ Future<Result<Token>> forceRefresh();
 Future<void>          setTokens(Token token);
 Future<void>          clear();
 Future<Token?>        peek();
+Future<bool>          hasValidToken();          // non-refreshing presence check
 bool                  get isRefreshing;         // sync — true while refreshing
+DateTime?             get lastRefreshAt;        // last refresh timestamp
 Stream<TokenEvent>    get events;
 Stream<Token?>        get tokenStream;          // reactive token changes
 Stream<Token?>        currentTokenStream();     // seed + subscribe in one call
@@ -315,6 +339,14 @@ abstract interface class TokenStorage {
 
 Built-in: `InMemoryTokenStorage({Token? initial})` — also exposes
 `snapshot` (sync getter) and `clone()` for tests.
+
+All `TokenStorage` implementations gain the `exists()` extension method:
+
+```dart
+if (await storage.exists()) {
+  // a token is stored
+}
+```
 
 #### `CachingTokenStorage`
 
@@ -445,6 +477,9 @@ api.interceptors.add(TokenKeeperInterceptor(
   scheme: 'Bearer',                                       // optional
   shouldRefreshOn: (r) => r?.statusCode == 401,           // optional
   onRefreshFailed: (_) => router.go('/login'),            // optional
+  onTokenAttached: (token, opts) {                        // optional
+    logger.debug('auth: ${token.maskedAccessToken} → ${opts.path}');
+  },
 ));
 ```
 
