@@ -99,8 +99,7 @@ class Token extends Equatable {
       DateTime? issuedAt;
       final iat = claims['iat'];
       if (iat is int) {
-        issuedAt =
-            DateTime.fromMillisecondsSinceEpoch(iat * 1000, isUtc: true);
+        issuedAt = DateTime.fromMillisecondsSinceEpoch(iat * 1000, isUtc: true);
       }
 
       final subject = claims['sub'] is String ? claims['sub'] as String : null;
@@ -115,8 +114,16 @@ class Token extends Equatable {
       }
 
       const standardClaims = {
-        'exp', 'iat', 'nbf', 'iss', 'sub', 'aud', 'jti',
-        'scope', 'scp', 'scopes',
+        'exp',
+        'iat',
+        'nbf',
+        'iss',
+        'sub',
+        'aud',
+        'jti',
+        'scope',
+        'scp',
+        'scopes',
       };
       final metadata = Map<String, dynamic>.unmodifiable(
         Map.fromEntries(
@@ -337,9 +344,16 @@ class Token extends Equatable {
       };
 
   @override
-  List<Object?> get props =>
-      [accessToken, refreshToken, expiresAt, scopes, metadata,
-       subject, issuer, issuedAt];
+  List<Object?> get props => [
+        accessToken,
+        refreshToken,
+        expiresAt,
+        scopes,
+        metadata,
+        subject,
+        issuer,
+        issuedAt
+      ];
 
   @override
   bool get stringify => false;

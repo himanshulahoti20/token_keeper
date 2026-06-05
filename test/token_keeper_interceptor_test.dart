@@ -204,7 +204,8 @@ void main() {
     );
   });
 
-  test('onTokenAttached is called with the token and request options', () async {
+  test('onTokenAttached is called with the token and request options',
+      () async {
     await storage.write(Token(
       accessToken: 'live-token',
       expiresAt: clock.now().add(const Duration(hours: 1)),

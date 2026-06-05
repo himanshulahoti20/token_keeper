@@ -166,8 +166,7 @@ void main() {
       test('age() returns elapsed time since issuedAt', () {
         final iat = DateTime.utc(2025, 1, 1, 12);
         final now = DateTime.utc(2025, 1, 1, 13);
-        final token =
-            Token(accessToken: 'a', issuedAt: iat);
+        final token = Token(accessToken: 'a', issuedAt: iat);
         expect(token.age(now), const Duration(hours: 1));
       });
 
