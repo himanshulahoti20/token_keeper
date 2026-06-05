@@ -10,7 +10,8 @@ import 'package:equatable/equatable.dart';
 ///
 /// `metadata` carries arbitrary extra claims — tenant IDs, user IDs, feature
 /// flags, or any non-standard JWT payload fields. [tryParseJwt] populates it
-/// automatically from non-standard claims.
+/// automatically from non-standard claims, while the standard claims `sub`,
+/// `iss`, and `iat` are surfaced as first-class typed fields.
 class Token extends Equatable {
   /// Creates an immutable [Token].
   const Token({
@@ -19,6 +20,9 @@ class Token extends Equatable {
     this.expiresAt,
     this.scopes = const [],
     this.metadata = const {},
+    this.subject,
+    this.issuer,
+    this.issuedAt,
   });
 
   /// Reconstructs a [Token] from its [toJson] form.
@@ -31,6 +35,7 @@ class Token extends Equatable {
         ? List<String>.unmodifiable(rawScopes.map((e) => e as String))
         : const <String>[];
     final rawExpires = json['expiresAt'];
+    final rawIssuedAt = json['issuedAt'];
     final rawMetadata = json['metadata'];
     final metadata = rawMetadata is Map<String, dynamic>
         ? Map<String, dynamic>.unmodifiable(rawMetadata)
@@ -42,6 +47,10 @@ class Token extends Equatable {
           rawExpires == null ? null : DateTime.parse(rawExpires as String),
       scopes: scopes,
       metadata: metadata,
+      subject: json['subject'] as String?,
+      issuer: json['issuer'] as String?,
+      issuedAt:
+          rawIssuedAt == null ? null : DateTime.parse(rawIssuedAt as String),
     );
   }
 
@@ -56,8 +65,8 @@ class Token extends Equatable {
     }
   }
 
-  /// Parses a JWT [jwt] and returns a [Token] seeded with the `exp` and
-  /// `scope` / `scopes` / `scp` claims found in the payload.
+  /// Parses a JWT [jwt] and returns a [Token] seeded with the `exp`, `iat`,
+  /// `sub`, `iss`, and `scope` / `scopes` / `scp` claims found in the payload.
   ///
   /// The raw JWT string is stored as [accessToken] verbatim so it can be
   /// attached to requests as-is. [refreshToken] is `null` unless supplied
@@ -87,6 +96,16 @@ class Token extends Equatable {
             DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
       }
 
+      DateTime? issuedAt;
+      final iat = claims['iat'];
+      if (iat is int) {
+        issuedAt =
+            DateTime.fromMillisecondsSinceEpoch(iat * 1000, isUtc: true);
+      }
+
+      final subject = claims['sub'] is String ? claims['sub'] as String : null;
+      final issuer = claims['iss'] is String ? claims['iss'] as String : null;
+
       List<String> scopes = const [];
       final scopeClaim = claims['scope'] ?? claims['scp'] ?? claims['scopes'];
       if (scopeClaim is String && scopeClaim.isNotEmpty) {
@@ -96,16 +115,8 @@ class Token extends Equatable {
       }
 
       const standardClaims = {
-        'exp',
-        'iat',
-        'nbf',
-        'iss',
-        'sub',
-        'aud',
-        'jti',
-        'scope',
-        'scp',
-        'scopes',
+        'exp', 'iat', 'nbf', 'iss', 'sub', 'aud', 'jti',
+        'scope', 'scp', 'scopes',
       };
       final metadata = Map<String, dynamic>.unmodifiable(
         Map.fromEntries(
@@ -119,6 +130,9 @@ class Token extends Equatable {
         expiresAt: expiresAt,
         scopes: scopes,
         metadata: metadata,
+        subject: subject,
+        issuer: issuer,
+        issuedAt: issuedAt,
       );
     } catch (_) {
       return null;
@@ -140,11 +154,31 @@ class Token extends Equatable {
 
   /// Arbitrary extra data associated with this token.
   ///
-  /// Use this to carry non-standard JWT claims (e.g. tenant ID, user ID,
-  /// feature flags) or any custom fields returned alongside the token
-  /// response. [tryParseJwt] populates this automatically from all
-  /// non-standard claims in the JWT payload.
+  /// Carries non-standard JWT claims (tenant IDs, roles, feature flags) or
+  /// any custom fields returned alongside the token response.
+  /// [tryParseJwt] populates this from all non-standard claims in the JWT
+  /// payload. Standard claims are surfaced as typed fields instead.
   final Map<String, dynamic> metadata;
+
+  /// The `sub` (subject) claim from the JWT — typically a user or service ID.
+  ///
+  /// `null` if the token was not created via [tryParseJwt] or the JWT has no
+  /// `sub` claim.
+  final String? subject;
+
+  /// The `iss` (issuer) claim from the JWT — identifies who issued the token.
+  ///
+  /// `null` if the token was not created via [tryParseJwt] or the JWT has no
+  /// `iss` claim.
+  final String? issuer;
+
+  /// The `iat` (issued-at) claim from the JWT — when the token was minted.
+  ///
+  /// `null` if the token was not created via [tryParseJwt] or the JWT has no
+  /// `iat` claim. Use [age] to get the elapsed time since issuance.
+  final DateTime? issuedAt;
+
+  // ---- expiry helpers -------------------------------------------------------
 
   /// Returns `true` if [expiresAt] is non-null and not in the future.
   ///
@@ -200,6 +234,20 @@ class Token extends Equatable {
           {Duration window = const Duration(minutes: 5), DateTime? now}) =>
       willExpireWithin(window, now);
 
+  /// Returns the elapsed time since [issuedAt].
+  ///
+  /// Returns `null` when [issuedAt] is not set. Never returns a negative
+  /// duration — returns [Duration.zero] if `now` is somehow before [issuedAt]
+  /// (e.g. clock skew).
+  Duration? age([DateTime? now]) {
+    final iat = issuedAt;
+    if (iat == null) return null;
+    final elapsed = (now ?? DateTime.now()).difference(iat);
+    return elapsed.isNegative ? Duration.zero : elapsed;
+  }
+
+  // ---- logging helpers ------------------------------------------------------
+
   /// Returns a partially-redacted form of [accessToken] suitable for logs.
   ///
   /// Shows the first 4 and last 4 characters joined by `…` (e.g.
@@ -234,7 +282,8 @@ class Token extends Equatable {
   bool isValidWithAllScopes(List<String> required, [DateTime? now]) =>
       isValid(now) && hasAllScopes(required);
 
-  /// Returns `true` if the token is valid and has **at least one** of [any] scopes.
+  /// Returns `true` if the token is valid and has **at least one** of [any]
+  /// scopes.
   ///
   /// Combines [isValid] and [hasAnyScope] for convenience at request
   /// boundaries where both expiry and scope grants must be checked.
@@ -245,16 +294,22 @@ class Token extends Equatable {
 
   /// Returns a copy with the supplied fields replaced.
   ///
-  /// Use [clearRefreshToken] / [clearExpiresAt] to explicitly null those
-  /// fields (regular `null` arguments are treated as "no change").
+  /// Use the `clear*` flags to explicitly null nullable fields — passing `null`
+  /// for a nullable parameter means "no change".
   Token copyWith({
     String? accessToken,
     String? refreshToken,
     DateTime? expiresAt,
     List<String>? scopes,
     Map<String, dynamic>? metadata,
+    String? subject,
+    String? issuer,
+    DateTime? issuedAt,
     bool clearRefreshToken = false,
     bool clearExpiresAt = false,
+    bool clearSubject = false,
+    bool clearIssuer = false,
+    bool clearIssuedAt = false,
   }) {
     return Token(
       accessToken: accessToken ?? this.accessToken,
@@ -263,6 +318,9 @@ class Token extends Equatable {
       expiresAt: clearExpiresAt ? null : (expiresAt ?? this.expiresAt),
       scopes: scopes ?? this.scopes,
       metadata: metadata ?? this.metadata,
+      subject: clearSubject ? null : (subject ?? this.subject),
+      issuer: clearIssuer ? null : (issuer ?? this.issuer),
+      issuedAt: clearIssuedAt ? null : (issuedAt ?? this.issuedAt),
     );
   }
 
@@ -273,17 +331,29 @@ class Token extends Equatable {
         'expiresAt': expiresAt?.toIso8601String(),
         'scopes': scopes,
         if (metadata.isNotEmpty) 'metadata': metadata,
+        if (subject != null) 'subject': subject,
+        if (issuer != null) 'issuer': issuer,
+        if (issuedAt != null) 'issuedAt': issuedAt!.toIso8601String(),
       };
 
   @override
   List<Object?> get props =>
-      [accessToken, refreshToken, expiresAt, scopes, metadata];
+      [accessToken, refreshToken, expiresAt, scopes, metadata,
+       subject, issuer, issuedAt];
 
   @override
   bool get stringify => false;
 
   @override
-  String toString() =>
-      'Token(access=***${accessToken.length}, refresh=${refreshToken == null ? 'null' : '***'}, '
-      'expiresAt=$expiresAt, scopes=$scopes)';
+  String toString() {
+    final buf = StringBuffer(
+      'Token(access=***${accessToken.length}, '
+      'refresh=${refreshToken == null ? 'null' : '***'}, '
+      'expiresAt=$expiresAt, scopes=$scopes',
+    );
+    if (subject != null) buf.write(', subject=$subject');
+    if (issuer != null) buf.write(', issuer=$issuer');
+    buf.write(')');
+    return buf.toString();
+  }
 }

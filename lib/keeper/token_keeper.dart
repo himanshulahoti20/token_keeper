@@ -72,6 +72,7 @@ class TokenKeeper {
   Completer<Result<Token>>? _refreshCompleter;
 
   bool _disposed = false;
+  DateTime? _lastRefreshAt;
 
   /// Lifecycle events. Use this to drive logout flows or UI feedback.
   Stream<TokenEvent> get events => _eventsController.stream;
@@ -95,6 +96,28 @@ class TokenKeeper {
   /// Synchronous read — useful for showing a loading indicator without
   /// subscribing to [events].
   bool get isRefreshing => _refreshCompleter != null;
+
+  /// The timestamp of the most recent **successful** refresh, or `null` if no
+  /// refresh has completed in this keeper's lifetime.
+  ///
+  /// Updated every time [_executeFlight] stores a new token — including
+  /// refreshes triggered by [forceRefresh], [getValidToken], and the
+  /// [TokenKeeperInterceptor] 401 retry path.
+  DateTime? get lastRefreshAt => _lastRefreshAt;
+
+  /// Returns `true` if a non-expired token exists in storage.
+  ///
+  /// Unlike [getValidToken], this method **never triggers a refresh** — it
+  /// purely inspects the current stored state. Use it for "are we logged in?"
+  /// checks in UI code where side effects are unwanted.
+  ///
+  /// Does not respect [proactiveWindow]: a token that is within the proactive
+  /// window but not yet expired returns `true`.
+  Future<bool> hasValidToken() async {
+    final token = await _storage.read();
+    if (token == null) return false;
+    return token.isValid(_clock.now());
+  }
 
   /// Returns a [Stream] that immediately emits the current stored token and
   /// then continues with every subsequent change from [tokenStream].
@@ -260,6 +283,7 @@ class TokenKeeper {
     // see a consistent storage state.
     if (result is Success<Token>) {
       await _storage.write(result.data);
+      _lastRefreshAt = _clock.now();
       _emit(TokenRefreshedEvent(result.data));
     } else if (result is Error<Token>) {
       _emit(RefreshFailedEvent(result.failure));
@@ -331,7 +355,7 @@ class TokenKeeper {
   }
 
   void _checkNotDisposed() {
-    assert(!_disposed, 'TokenKeeper has been disposed');
+    if (_disposed) throw StateError('TokenKeeper has been disposed');
   }
 }
 

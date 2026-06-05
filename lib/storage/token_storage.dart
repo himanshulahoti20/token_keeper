@@ -15,3 +15,13 @@ abstract interface class TokenStorage {
   /// Removes any stored token. A no-op if storage is empty.
   Future<void> delete();
 }
+
+/// Convenience extensions on any [TokenStorage] implementation.
+extension TokenStorageExtension on TokenStorage {
+  /// Returns `true` if a token is currently in storage.
+  ///
+  /// Equivalent to `(await read()) != null` but reads more naturally at
+  /// call sites that only need a presence check — e.g. "is the user logged
+  /// in?" without needing the token itself.
+  Future<bool> exists() async => (await read()) != null;
+}

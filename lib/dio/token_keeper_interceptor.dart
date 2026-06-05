@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:resilify/resilify.dart';
 
+import '../core/token.dart';
 import '../keeper/token_keeper.dart';
 
 /// Dio interceptor that authenticates requests with [TokenKeeper].
@@ -37,6 +38,7 @@ class TokenKeeperInterceptor extends Interceptor {
     this.scheme = 'Bearer',
     bool Function(Response<dynamic>? response)? shouldRefreshOn,
     this.onRefreshFailed,
+    this.onTokenAttached,
   }) : _shouldRefreshOn = shouldRefreshOn ?? _defaultShouldRefreshOn;
 
   /// Token source.
@@ -66,6 +68,23 @@ class TokenKeeperInterceptor extends Interceptor {
   /// regardless of whether this callback is set.
   final void Function(Failure failure)? onRefreshFailed;
 
+  /// Called each time a token is successfully attached to an outgoing request.
+  ///
+  /// Receives the [Token] that was attached and the [RequestOptions] for the
+  /// request. Useful for per-request logging, analytics, or debugging without
+  /// adding a separate `tokenStream` subscription.
+  ///
+  /// ```dart
+  /// TokenKeeperInterceptor(
+  ///   keeper: keeper,
+  ///   dio: dio,
+  ///   onTokenAttached: (token, options) {
+  ///     logger.debug('${options.path}: ${token.maskedAccessToken}');
+  ///   },
+  /// );
+  /// ```
+  final void Function(Token token, RequestOptions options)? onTokenAttached;
+
   final bool Function(Response<dynamic>? response) _shouldRefreshOn;
 
   static const String _retryFlag = '_token_keeper_retried';
@@ -84,6 +103,7 @@ class TokenKeeperInterceptor extends Interceptor {
     final token = result.dataOrNull;
     if (token != null) {
       options.headers[headerName] = '$scheme ${token.accessToken}';
+      onTokenAttached?.call(token, options);
     }
     handler.next(options);
   }

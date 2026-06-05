@@ -143,6 +143,40 @@ void main() {
       expect(readCount, 2);
     });
 
+    test('concurrent reads share a single backing-store load (1.3.0)',
+        () async {
+      var hits = 0;
+      final backing = _CountingStorage(
+        onRead: () {
+          hits++;
+          return const Token(accessToken: 'a');
+        },
+      );
+      final cache = CachingTokenStorage(backing);
+
+      // Fire two reads concurrently before either completes.
+      final results = await Future.wait([cache.read(), cache.read()]);
+
+      expect(hits, 1, reason: 'backing store should only be read once');
+      expect(results[0], results[1]);
+    });
+
+    test('concurrent warmup + read share a single backing-store load (1.3.0)',
+        () async {
+      var hits = 0;
+      final backing = _CountingStorage(
+        onRead: () {
+          hits++;
+          return const Token(accessToken: 'a');
+        },
+      );
+      final cache = CachingTokenStorage(backing);
+
+      await Future.wait([cache.warmup(), cache.read()]);
+
+      expect(hits, 1, reason: 'warmup and read should share the same load');
+    });
+
     test('refresh updates isCached and cachedToken', () async {
       final backing = InMemoryTokenStorage(
         initial: const Token(accessToken: 'a'),
