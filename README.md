@@ -56,6 +56,19 @@ same vocabulary as the rest of your API stack.
   equality, serialisation, and `copyWith`.
 - **`Token.age()`** — time elapsed since `issuedAt` as a `Duration?`; `null`
   when `issuedAt` is absent, never negative.
+- **`TokenKeeperInterceptor.shouldAttach`** — per-request predicate; return
+  `false` to leave the request untouched and skip refresh/retry on its `401`.
+  Stops the token leaking to third-party hosts sharing one `Dio`.
+- **Burst-safe 401 retry** — requests that failed with an already-replaced
+  token retry with the newer one via `TokenKeeper.refreshIfStale` instead of
+  each triggering a refresh.
+- **`TokenKeeper.authStateStream()`** — `Stream<bool>` of logged-in state
+  (current value first, duplicates dropped); drives login/logout routing.
+- **`TokenKeeper.expiresIn()`** — non-refreshing `Future<Duration?>` of time
+  left on the stored token (`null` if none / no expiry, never negative). Ideal
+  for "session expires in N min" UI.
+- **`TokenKeeper.refreshCount`** — number of successful refreshes in this
+  keeper's lifetime; for diagnostics and asserting single-flight in tests.
 - **`TokenKeeper.hasValidToken()`** — non-refreshing presence check; returns
   `true` if a non-expired token is in storage. The clean "are we logged in?"
   check for UI code that must not trigger side effects.
@@ -91,7 +104,7 @@ same vocabulary as the rest of your API stack.
 
 ```yaml
 dependencies:
-  token_keeper: ^1.3.0
+  token_keeper: ^1.4.0
   # Pulled in transitively, but list it if you import resilify directly.
   # resilify: ^1.0.6
 ```
@@ -279,6 +292,10 @@ Future<Token?>        peek();
 Future<bool>          hasValidToken();          // non-refreshing presence check
 bool                  get isRefreshing;         // sync — true while refreshing
 DateTime?             get lastRefreshAt;        // last refresh timestamp
+int                   get refreshCount;         // successful refreshes so far
+Future<Duration?>     expiresIn();              // time left, no refresh
+Stream<bool>          authStateStream();        // logged-in state, distinct
+Future<Result<Token>> refreshIfStale(String accessToken); // skip if replaced
 Stream<TokenEvent>    get events;
 Stream<Token?>        get tokenStream;          // reactive token changes
 Stream<Token?>        currentTokenStream();     // seed + subscribe in one call
@@ -480,6 +497,7 @@ api.interceptors.add(TokenKeeperInterceptor(
   onTokenAttached: (token, opts) {                        // optional
     logger.debug('auth: ${token.maskedAccessToken} → ${opts.path}');
   },
+  shouldAttach: (o) => o.uri.host == 'api.example.com',   // optional
 ));
 ```
 

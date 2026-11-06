@@ -4,6 +4,34 @@ All notable changes to this package will be documented in this file. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-11-07
+
+### Added
+
+- **`TokenKeeperInterceptor.shouldAttach`** — per-request predicate
+  (`bool Function(RequestOptions)`). Return `false` to send the request with
+  no token and to ignore its `401`s (no refresh, no retry). Keeps the bearer
+  token away from third-party hosts when one `Dio` talks to several services.
+- **`TokenKeeper.refreshIfStale(staleAccessToken)`** — refreshes only if the
+  given access token is still the stored one; otherwise returns the newer
+  stored token with no network call.
+- **`TokenKeeper.authStateStream()`** — `Stream<bool>` that emits the current
+  logged-in state, then only genuine changes (duplicates dropped, so a token
+  refresh doesn't emit). Built for login/logout routing.
+- **`TokenKeeper.expiresIn()`** — returns the time left on the stored token as
+  a `Future<Duration?>` **without triggering a refresh**. `null` when no token
+  is stored or it has no `expiresAt`; `Duration.zero` when already expired.
+- **`TokenKeeper.refreshCount`** — number of successful refreshes completed in
+  this keeper's lifetime. Useful for diagnostics and single-flight assertions.
+
+### Changed
+
+- **Interceptor 401 handling is now burst-safe.** When several requests fail
+  with the same expired token, only the first triggers a refresh; the rest see
+  the already-replaced token via `refreshIfStale` and just retry with it.
+  Previously each one ran its own (sequential) refresh.
+- `.serena/` added to `.gitignore`.
+
 ## [1.3.0] — 2026-06-05
 
 ### Added

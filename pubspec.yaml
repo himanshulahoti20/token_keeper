@@ -4,7 +4,7 @@ description: >-
   proactive expiry, JWT parsing with metadata extraction, background refresh
   timer, reactive streams, Result-based APIs, and a Dio interceptor for
   drop-in 401 retry.
-version: 1.3.0
+version: 1.4.0
 homepage: https://github.com/himanshulahoti20/token_keeper
 repository: https://github.com/himanshulahoti20/token_keeper
 issue_tracker: https://github.com/himanshulahoti20/token_keeper/issues
