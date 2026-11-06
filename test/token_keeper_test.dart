@@ -637,6 +637,108 @@ void main() {
     });
   });
 
+  group('authStateStream / refreshIfStale (1.4.0)', () {
+    TokenKeeper make(TokenRefresher refresher) {
+      final keeper =
+          TokenKeeper(storage: storage, refresher: refresher, clock: clock);
+      addTearDown(keeper.dispose);
+      return keeper;
+    }
+
+    Token live(String a) =>
+        _expiringToken(access: a, expiresAt: now.add(const Duration(hours: 1)));
+
+    test('authStateStream seeds, drops duplicates, and flips on clear',
+        () async {
+      final keeper = make((_) async => const Error(Failure.unknown()));
+      final seen = <bool>[];
+      final sub = keeper.authStateStream().listen(seen.add);
+      await pumpEventQueue();
+      await keeper.setTokens(live('a'));
+      await keeper.setTokens(live('b')); // still logged in: no emission
+      await keeper.clear();
+      await pumpEventQueue();
+      await sub.cancel();
+      expect(seen, [false, true, false]);
+    });
+
+    test('refreshIfStale skips the network when the token already changed',
+        () async {
+      var calls = 0;
+      final keeper = make((c) async {
+        calls++;
+        return Success(c.copyWith(accessToken: 'fresh'));
+      });
+      await storage.write(live('newer'));
+      final r = await keeper.refreshIfStale('old');
+      expect((r as Success<Token>).data.accessToken, 'newer');
+      expect(calls, 0);
+    });
+
+    test('refreshIfStale refreshes when the stale token is still stored',
+        () async {
+      var calls = 0;
+      final keeper = make((c) async {
+        calls++;
+        return Success(c.copyWith(accessToken: 'fresh'));
+      });
+      await storage.write(live('old'));
+      final r = await keeper.refreshIfStale('old');
+      expect((r as Success<Token>).data.accessToken, 'fresh');
+      expect(calls, 1);
+    });
+
+    test('refreshIfStale errors when storage is empty', () async {
+      final keeper = make((_) async => const Error(Failure.unknown()));
+      expect(await keeper.refreshIfStale('x'), isA<Error<Token>>());
+    });
+  });
+
+  group('expiresIn / refreshCount (1.4.0)', () {
+    TokenKeeper make({TokenRefresher? refresher}) {
+      final keeper = TokenKeeper(
+        storage: storage,
+        refresher:
+            refresher ??
+            (c) async => Success(
+              c.copyWith(expiresAt: now.add(const Duration(hours: 1))),
+            ),
+        clock: clock,
+      );
+      addTearDown(keeper.dispose);
+      return keeper;
+    }
+
+    test('expiresIn is null with empty storage or no expiry', () async {
+      final keeper = make();
+      expect(await keeper.expiresIn(), isNull);
+      await storage.write(_expiringToken());
+      expect(await keeper.expiresIn(), isNull);
+    });
+
+    test('expiresIn returns remaining time, clamped at zero', () async {
+      final keeper = make();
+      await storage.write(
+        _expiringToken(expiresAt: now.add(const Duration(minutes: 5))),
+      );
+      expect(await keeper.expiresIn(), const Duration(minutes: 5));
+      await storage.write(
+        _expiringToken(expiresAt: now.subtract(const Duration(minutes: 5))),
+      );
+      expect(await keeper.expiresIn(), Duration.zero);
+    });
+
+    test('refreshCount counts only successful refreshes', () async {
+      await storage.write(
+        _expiringToken(expiresAt: now.subtract(const Duration(seconds: 1))),
+      );
+      final keeper = make();
+      expect(keeper.refreshCount, 0);
+      await Future.wait([keeper.getValidToken(), keeper.getValidToken()]);
+      expect(keeper.refreshCount, 1);
+    });
+  });
+
   group('dispose safety (1.3.0)', () {
     test('calling getValidToken after dispose throws StateError', () async {
       final keeper = TokenKeeper(

@@ -39,6 +39,7 @@ class TokenKeeperInterceptor extends Interceptor {
     bool Function(Response<dynamic>? response)? shouldRefreshOn,
     this.onRefreshFailed,
     this.onTokenAttached,
+    this.shouldAttach,
   }) : _shouldRefreshOn = shouldRefreshOn ?? _defaultShouldRefreshOn;
 
   /// Token source.
@@ -85,6 +86,21 @@ class TokenKeeperInterceptor extends Interceptor {
   /// ```
   final void Function(Token token, RequestOptions options)? onTokenAttached;
 
+  /// Decides per request whether to attach the token. Return `false` to send
+  /// the request untouched — and to ignore its `401`s (no refresh, no retry).
+  ///
+  /// Use it to keep the bearer token away from third-party hosts when one
+  /// `Dio` talks to several services:
+  ///
+  /// ```dart
+  /// TokenKeeperInterceptor(
+  ///   keeper: keeper,
+  ///   dio: dio,
+  ///   shouldAttach: (o) => o.uri.host == 'api.example.com',
+  /// );
+  /// ```
+  final bool Function(RequestOptions options)? shouldAttach;
+
   final bool Function(Response<dynamic>? response) _shouldRefreshOn;
 
   static const String _retryFlag = '_token_keeper_retried';
@@ -95,7 +111,8 @@ class TokenKeeperInterceptor extends Interceptor {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    if (options.extra[_skipAuthFlag] == true) {
+    if (options.extra[_skipAuthFlag] == true ||
+        !(shouldAttach?.call(options) ?? true)) {
       handler.next(options);
       return;
     }
@@ -116,12 +133,20 @@ class TokenKeeperInterceptor extends Interceptor {
     final response = err.response;
     final alreadyRetried = err.requestOptions.extra[_retryFlag] == true;
 
-    if (alreadyRetried || !_shouldRefreshOn(response)) {
+    if (alreadyRetried ||
+        !(shouldAttach?.call(err.requestOptions) ?? true) ||
+        !_shouldRefreshOn(response)) {
       handler.next(err);
       return;
     }
 
-    final refreshed = await keeper.forceRefresh();
+    // If the failing request carried a token that has since been replaced,
+    // reuse the newer one instead of refreshing again.
+    final sent = err.requestOptions.headers[headerName];
+    final prefix = '$scheme ';
+    final refreshed = sent is String && sent.startsWith(prefix)
+        ? await keeper.refreshIfStale(sent.substring(prefix.length))
+        : await keeper.forceRefresh();
     final refreshedToken = refreshed.dataOrNull;
     if (refreshedToken == null) {
       onRefreshFailed?.call(refreshed.errorOrNull!);

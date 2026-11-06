@@ -288,4 +288,76 @@ void main() {
     expect(caught!.code, 401);
     expect(caught!.message, 'gone');
   });
+
+  group('1.4.0', () {
+    TokenKeeper makeKeeper(TokenRefresher refresher) {
+      final keeper =
+          TokenKeeper(storage: storage, refresher: refresher, clock: clock);
+      addTearDown(keeper.dispose);
+      return keeper;
+    }
+
+    Token live(String access) => Token(
+          accessToken: access,
+          expiresAt: clock.now().add(const Duration(hours: 1)),
+        );
+
+    test('shouldAttach=false sends no header and never refreshes on 401',
+        () async {
+      await storage.write(live('old'));
+      var refreshes = 0;
+      final keeper = makeKeeper((c) async {
+        refreshes++;
+        return Success(c.copyWith(accessToken: 'fresh'));
+      });
+      dio.interceptors.add(TokenKeeperInterceptor(
+        keeper: keeper,
+        dio: dio,
+        shouldAttach: (o) => o.uri.host == 'api.example.com',
+      ));
+      adapter.enqueue((_) => _json({}, 401));
+
+      await expectLater(
+        dio.get<dynamic>('https://third-party.example.org/x'),
+        throwsA(isA<DioException>()),
+      );
+      expect(adapter.received.single.headers['Authorization'], isNull);
+      expect(refreshes, 0);
+    });
+
+    test('shouldAttach=true still attaches for matching hosts', () async {
+      await storage.write(live('old'));
+      final keeper = makeKeeper((_) async => const Error(Failure.unknown()));
+      dio.interceptors.add(TokenKeeperInterceptor(
+        keeper: keeper,
+        dio: dio,
+        shouldAttach: (o) => o.uri.host == 'api.example.com',
+      ));
+      await dio.get<dynamic>('/me');
+      expect(adapter.received.single.headers['Authorization'], 'Bearer old');
+    });
+
+    test('a 401 for an already-replaced token reuses it without refreshing',
+        () async {
+      await storage.write(live('old'));
+      var refreshes = 0;
+      final keeper = makeKeeper((c) async {
+        refreshes++;
+        return Success(c.copyWith(accessToken: 'fresh'));
+      });
+      dio.interceptors.add(TokenKeeperInterceptor(keeper: keeper, dio: dio));
+
+      // While the request is in flight, another caller replaces the token.
+      adapter.enqueue((_) {
+        unawaited(storage.write(live('newer')));
+        return _json({}, 401);
+      });
+      adapter.enqueue((_) => _json({'ok': true}, 200));
+
+      final res = await dio.get<dynamic>('/me');
+      expect(res.statusCode, 200);
+      expect(refreshes, 0);
+      expect(adapter.received[1].headers['Authorization'], 'Bearer newer');
+    });
+  });
 }

@@ -73,6 +73,7 @@ class TokenKeeper {
 
   bool _disposed = false;
   DateTime? _lastRefreshAt;
+  int _refreshCount = 0;
 
   /// Lifecycle events. Use this to drive logout flows or UI feedback.
   Stream<TokenEvent> get events => _eventsController.stream;
@@ -104,6 +105,23 @@ class TokenKeeper {
   /// refreshes triggered by [forceRefresh], [getValidToken], and the
   /// [TokenKeeperInterceptor] 401 retry path.
   DateTime? get lastRefreshAt => _lastRefreshAt;
+
+  /// Number of **successful** refreshes completed in this keeper's lifetime.
+  ///
+  /// Handy for diagnostics and tests asserting single-flight behaviour.
+  int get refreshCount => _refreshCount;
+
+  /// Time left until the stored token expires, **without triggering a
+  /// refresh**.
+  ///
+  /// Returns `null` if no token is stored or the token has no `expiresAt`.
+  /// Never negative — an already-expired token yields [Duration.zero].
+  /// Useful for "session expires in N minutes" UI.
+  Future<Duration?> expiresIn() async {
+    final remaining = (await _storage.read())?.remainingLifetime(_clock.now());
+    if (remaining == null) return null;
+    return remaining.isNegative ? Duration.zero : remaining;
+  }
 
   /// Returns `true` if a non-expired token exists in storage.
   ///
@@ -146,6 +164,20 @@ class TokenKeeper {
   /// ```
   Stream<T> onEvent<T extends TokenEvent>() =>
       events.where((e) => e is T).cast<T>();
+
+  /// Emits whether a token is currently stored: the current value first, then
+  /// every change, with consecutive duplicates dropped.
+  ///
+  /// Drives login/logout routing without comparing tokens by hand. A token
+  /// refresh (`true` -> `true`) does not emit; [clear] or an unauthorized
+  /// refresh failure emits `false`.
+  ///
+  /// ```dart
+  /// keeper.authStateStream().listen((loggedIn) =>
+  ///     router.go(loggedIn ? '/home' : '/login'));
+  /// ```
+  Stream<bool> authStateStream() =>
+      currentTokenStream().map((t) => t != null).distinct();
 
   /// Returns the stored token without touching the network.
   ///
@@ -205,6 +237,29 @@ class TokenKeeper {
       return const Error<Token>(
         Failure.unauthorized(message: 'No token to refresh'),
       );
+    }
+    return _runRefresh(current);
+  }
+
+  /// Refreshes only if [staleAccessToken] is still the stored access token.
+  ///
+  /// If storage already holds a different, unexpired token — because another
+  /// request refreshed it in the meantime — that token is returned with no
+  /// network call. This stops a burst of requests that all failed with the
+  /// same expired token from triggering one refresh *each* (single-flight
+  /// only dedupes refreshes that overlap in time). [TokenKeeperInterceptor]
+  /// uses this for its 401 handling.
+  Future<Result<Token>> refreshIfStale(String staleAccessToken) async {
+    _checkNotDisposed();
+    final current = await _storage.read();
+    if (current == null) {
+      return const Error<Token>(
+        Failure.unauthorized(message: 'No token to refresh'),
+      );
+    }
+    if (current.accessToken != staleAccessToken &&
+        !current.isExpired(_clock.now())) {
+      return Success<Token>(current);
     }
     return _runRefresh(current);
   }
@@ -284,6 +339,7 @@ class TokenKeeper {
     if (result is Success<Token>) {
       await _storage.write(result.data);
       _lastRefreshAt = _clock.now();
+      _refreshCount++;
       _emit(TokenRefreshedEvent(result.data));
     } else if (result is Error<Token>) {
       _emit(RefreshFailedEvent(result.failure));
