@@ -698,11 +698,10 @@ void main() {
     TokenKeeper make({TokenRefresher? refresher}) {
       final keeper = TokenKeeper(
         storage: storage,
-        refresher:
-            refresher ??
+        refresher: refresher ??
             (c) async => Success(
-              c.copyWith(expiresAt: now.add(const Duration(hours: 1))),
-            ),
+                  c.copyWith(expiresAt: now.add(const Duration(hours: 1))),
+                ),
         clock: clock,
       );
       addTearDown(keeper.dispose);
